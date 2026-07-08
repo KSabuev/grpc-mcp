@@ -1,0 +1,82 @@
+plugins {
+    id 'java'
+    id 'application'
+    id 'org.springframework.boot' version '3.4.4'
+    id 'io.spring.dependency-management' version '1.1.7'
+    id 'com.google.protobuf' version '0.9.4'
+}
+
+group = 'io.grpc.mcp'
+version = '1.0.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+application {
+    mainClass = 'io.grpc.mcp.McpServerApplication'
+}
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+ext {
+    grpcVersion = '1.76.0'
+    protobufVersion = '4.28.3'
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.retry:spring-retry'
+
+    // Lombok
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+
+    // MCP Java SDK (BOM + core + Jackson2 for Spring Boot compatibility)
+    implementation platform('io.modelcontextprotocol.sdk:mcp-bom:2.0.0')
+    implementation 'io.modelcontextprotocol.sdk:mcp-core'
+    implementation 'io.modelcontextprotocol.sdk:mcp-json-jackson2'
+
+    // gRPC and protobuf
+    implementation "io.grpc:grpc-netty-shaded:1.76.0"
+    implementation "io.grpc:grpc-protobuf:${grpcVersion}"
+    implementation "io.grpc:grpc-stub:${grpcVersion}"
+    implementation "io.grpc:grpc-api:${grpcVersion}"
+    implementation "com.google.protobuf:protobuf-java:${protobufVersion}"
+
+    // gRPC Server Reflection client
+    implementation "io.grpc:grpc-services:${grpcVersion}"
+
+    // protobuf JSON format
+    implementation "com.google.protobuf:protobuf-java-util:${protobufVersion}"
+
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+configurations.all {
+    resolutionStrategy.cacheChangingModulesFor(0, 'seconds')
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+    options.compilerArgs << '-parameters'
+}
+
+tasks.named('bootJar') {
+    archiveFileName = "grpc-mcp-${project.version}.jar"
+}
+
+bootBuildImage {
+    imageName = 'grpc-mcp:1.0'
+}
+
+test {
+    useJUnitPlatform()
+}

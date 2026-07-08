@@ -1,0 +1,37 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: grpc-mcp
+
+management:
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    io.modelcontextprotocol: DEBUG
+
+mcp:
+  api-key: ${MCP_API_KEY}
+  name: ${MCP_NAME}
+
+grpc:
+  address: ${GRPC_ADDRESS}
+  negotiation-type: ${GRPC_NEGOTIATION_TYPE:PLAINTEXT}
+  proto-file: ${GRPC_PROTO_FILE:}
+  metadata-json: ${GRPC_METADATA:{}}
+  call-timeout: ${GRPC_CALL_TIMEOUT:10s}
+  backoff-initial: ${GRPC_BACKOFF_INITIAL:500ms}
+  health-check-interval: ${GRPC_HEALTH_CHECK_INTERVAL:30s}
+  max-retries: ${GRPC_MAX_RETRIES:2}
+  keepalive-time: ${GRPC_KEEPALIVE_TIME:10s}
+  keepalive-timeout: ${GRPC_KEEPALIVE_TIMEOUT:5s}
+  keepalive-without-calls: ${GRPC_KEEPALIVE_WITHOUT_CALLS:true}
+  retry-backoff-multiplier: ${GRPC_RETRY_BACKOFF_MULTIPLIER:2.0}
+  retry-max-delay: ${GRPC_RETRY_MAX_DELAY:3s}
+  reflection-timeout: ${GRPC_REFLECTION_TIMEOUT:10s}
+  protoc-timeout: ${GRPC_PROTOC_TIMEOUT:10s}
+  schema-max-depth: ${GRPC_SCHEMA_MAX_DEPTH:10}
