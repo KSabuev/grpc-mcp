@@ -1,5 +1,6 @@
 package io.grpc.mcp.grpc.discovery;
 
+import com.google.protobuf.DescriptorProtos;
 import com.google.protobuf.DescriptorProtos.DescriptorProto;
 import com.google.protobuf.DescriptorProtos.EnumDescriptorProto;
 import com.google.protobuf.DescriptorProtos.FileDescriptorProto;
@@ -50,15 +51,63 @@ public final class DescriptorUtils {
             Map<String, String> fieldComments = new HashMap<>();
             Map<String, String> enumValueComments = new HashMap<>();
             Map<String, String> messageComments = new HashMap<>();
+
             for (FileDescriptorProto fdp : protoList) {
                 SourceCodeInfo sci = fdp.getSourceCodeInfo();
-                extractMethodComments(fdp, sci, methodComments);
-                extractServiceComments(fdp, sci, serviceComments);
-                collectFieldAndEnumComments(fdp, sci, fieldComments, enumValueComments);
-                collectMessageComments(fdp, sci, messageComments);
+                Map<List<Integer>, SourceCodeInfo.Location> locationIndex = buildLocationIndex(sci);
+                String prefix = pkgPrefix(fdp);
+
+                extractMethodComments(fdp, prefix, locationIndex, methodComments);
+                extractServiceComments(fdp, prefix, locationIndex, serviceComments);
+                collectFieldAndEnumComments(fdp, prefix, locationIndex, fieldComments, enumValueComments);
+                collectMessageComments(fdp, prefix, locationIndex, messageComments);
             }
             return new CommentMaps(methodComments, serviceComments, fieldComments, enumValueComments, messageComments);
         }
+    }
+
+    private static Map<List<Integer>, SourceCodeInfo.Location> buildLocationIndex(SourceCodeInfo sci) {
+        Map<List<Integer>, SourceCodeInfo.Location> index = new HashMap<>();
+        for (SourceCodeInfo.Location loc : sci.getLocationList()) {
+            index.put(loc.getPathList(), loc);
+        }
+        return index;
+    }
+
+    private static String findComment(Map<List<Integer>, SourceCodeInfo.Location> locationIndex, List<Integer> targetPath) {
+        SourceCodeInfo.Location loc = locationIndex.get(targetPath);
+        if (loc == null) return null;
+
+        String comment = loc.getLeadingComments();
+        if (!comment.isBlank()) {
+            return comment.trim();
+        }
+        comment = loc.getTrailingComments();
+        if (!comment.isBlank()) {
+            return comment.trim();
+        }
+        return null;
+    }
+
+    static void extractMethodComments(FileDescriptorProto fdp, SourceCodeInfo sci, Map<String, String> methodComments) {
+        extractMethodComments(fdp, pkgPrefix(fdp), buildLocationIndex(sci), methodComments);
+    }
+
+    static void extractServiceComments(FileDescriptorProto fdp, SourceCodeInfo sci, Map<String, String> serviceComments) {
+        extractServiceComments(fdp, pkgPrefix(fdp), buildLocationIndex(sci), serviceComments);
+    }
+
+    static void collectMessageComments(FileDescriptorProto fdp, SourceCodeInfo sci, Map<String, String> messageComments) {
+        collectMessageComments(fdp, pkgPrefix(fdp), buildLocationIndex(sci), messageComments);
+    }
+
+    static void collectFieldAndEnumComments(
+            FileDescriptorProto fdp,
+            SourceCodeInfo sci,
+            Map<String, String> fieldComments,
+            Map<String, String> enumValueComments
+    ) {
+        collectFieldAndEnumComments(fdp, pkgPrefix(fdp), buildLocationIndex(sci), fieldComments, enumValueComments);
     }
 
     public static DiscoveredServices collectServices(List<FileDescriptorProto> protoList) {
@@ -86,9 +135,12 @@ public final class DescriptorUtils {
         return new DiscoveredServices(List.copyOf(serviceNames), result);
     }
 
-    private static MethodMeta buildMethodMeta(Descriptors.MethodDescriptor methodDesc,
-                                               String svcFullName, String serviceComment,
-                                               CommentMaps comments) {
+    private static MethodMeta buildMethodMeta(
+            Descriptors.MethodDescriptor methodDesc,
+            String svcFullName,
+            String serviceComment,
+            CommentMaps comments
+    ) {
         String methodKey = svcFullName + "/" + methodDesc.getName();
         String inputMsgFullName = methodDesc.getInputType().getFullName();
 
@@ -117,7 +169,7 @@ public final class DescriptorUtils {
                 .build();
     }
 
-    public static List<FileDescriptor> buildFileDescriptors(List<FileDescriptorProto> protoList) {
+    static List<FileDescriptor> buildFileDescriptors(List<FileDescriptorProto> protoList) {
         Map<String, FileDescriptorProto> protoMap = new LinkedHashMap<>();
         for (FileDescriptorProto p : protoList) {
             protoMap.put(p.getName(), p);
@@ -162,10 +214,9 @@ public final class DescriptorUtils {
         return result;
     }
 
-    public static void extractMethodComments(FileDescriptorProto fdp, SourceCodeInfo sci,
-                                              Map<String, String> methodComments) {
-        String prefix = pkgPrefix(fdp);
-
+    private static void extractMethodComments(FileDescriptorProto fdp, String prefix,
+                                               Map<List<Integer>, SourceCodeInfo.Location> locationIndex,
+                                               Map<String, String> methodComments) {
         for (int si = 0; si < fdp.getServiceCount(); si++) {
             var svcProto = fdp.getService(si);
             String svcFullName = prefix + svcProto.getName();
@@ -176,10 +227,10 @@ public final class DescriptorUtils {
 
                 List<Integer> targetPath = Arrays.asList(
                         FileDescriptorProto.SERVICE_FIELD_NUMBER, si,
-                        com.google.protobuf.DescriptorProtos.ServiceDescriptorProto.METHOD_FIELD_NUMBER, mi
+                        DescriptorProtos.ServiceDescriptorProto.METHOD_FIELD_NUMBER, mi
                 );
 
-                String comment = findComment(sci, targetPath);
+                String comment = findComment(locationIndex, targetPath);
                 if (comment != null) {
                     methodComments.put(key, comment);
                 }
@@ -187,45 +238,49 @@ public final class DescriptorUtils {
         }
     }
 
-    public static void extractServiceComments(FileDescriptorProto fdp, SourceCodeInfo sci,
-                                               Map<String, String> serviceComments) {
-        String prefix = pkgPrefix(fdp);
-
+    private static void extractServiceComments(
+            FileDescriptorProto fdp,
+            String prefix,
+            Map<List<Integer>, SourceCodeInfo.Location> locationIndex,
+            Map<String, String> serviceComments
+    ) {
         for (int si = 0; si < fdp.getServiceCount(); si++) {
             var svcProto = fdp.getService(si);
             String svcFullName = prefix + svcProto.getName();
 
-            List<Integer> targetPath = Arrays.asList(
-                    FileDescriptorProto.SERVICE_FIELD_NUMBER, si
-            );
+            List<Integer> targetPath = Arrays.asList(FileDescriptorProto.SERVICE_FIELD_NUMBER, si);
 
-            String comment = findComment(sci, targetPath);
+            String comment = findComment(locationIndex, targetPath);
             if (comment != null) {
                 serviceComments.put(svcFullName, comment);
             }
         }
     }
 
-    public static void collectMessageComments(FileDescriptorProto fdp, SourceCodeInfo sci,
-                                               Map<String, String> messageComments) {
-        String prefix = pkgPrefix(fdp);
-
+    private static void collectMessageComments(
+            FileDescriptorProto fdp,
+            String prefix,
+            Map<List<Integer>, SourceCodeInfo.Location> locationIndex,
+            Map<String, String> messageComments
+    ) {
         for (int mi = 0; mi < fdp.getMessageTypeCount(); mi++) {
             var msg = fdp.getMessageType(mi);
             String msgName = prefix + msg.getName();
             List<Integer> targetPath = Arrays.asList(FILE_MSG_TYPE, mi);
-            String comment = findComment(sci, targetPath);
+            String comment = findComment(locationIndex, targetPath);
             if (comment != null) {
                 messageComments.put(msgName, comment);
             }
-            collectNestedMessageComments(sci, messageComments, msgName, targetPath, msg);
+            collectNestedMessageComments(locationIndex, messageComments, msgName, targetPath, msg);
         }
     }
 
-    private static void collectNestedMessageComments(SourceCodeInfo sci,
-                                                      Map<String, String> messageComments,
-                                                      String parentName,
-                                                      List<Integer> parentPath, DescriptorProto msg) {
+    private static void collectNestedMessageComments(
+            Map<List<Integer>, SourceCodeInfo.Location> locationIndex,
+            Map<String, String> messageComments,
+            String parentName,
+            List<Integer> parentPath, DescriptorProto msg
+    ) {
         for (int ni = 0; ni < msg.getNestedTypeCount(); ni++) {
             var nested = msg.getNestedType(ni);
             String nestedName = parentName + "." + nested.getName();
@@ -233,37 +288,43 @@ public final class DescriptorUtils {
             nestedPath.add(MSG_NESTED_TYPE);
             nestedPath.add(ni);
 
-            String comment = findComment(sci, nestedPath);
+            String comment = findComment(locationIndex, nestedPath);
             if (comment != null) {
                 messageComments.put(nestedName, comment);
             }
-            collectNestedMessageComments(sci, messageComments, nestedName, nestedPath, nested);
+            collectNestedMessageComments(locationIndex, messageComments, nestedName, nestedPath, nested);
         }
     }
 
-    public static void collectFieldAndEnumComments(FileDescriptorProto fdp, SourceCodeInfo sci,
-                                                    Map<String, String> fieldComments,
-                                                    Map<String, String> enumValueComments) {
-        String prefix = pkgPrefix(fdp);
-
+    private static void collectFieldAndEnumComments(
+            FileDescriptorProto fdp,
+            String prefix,
+            Map<List<Integer>, SourceCodeInfo.Location> locationIndex,
+            Map<String, String> fieldComments,
+            Map<String, String> enumValueComments
+    ) {
         for (int mi = 0; mi < fdp.getMessageTypeCount(); mi++) {
             DescriptorProto msg = fdp.getMessageType(mi);
             collectFromMessage(prefix, msg.getName(), Arrays.asList(FILE_MSG_TYPE, mi),
-                    msg, sci, fieldComments, enumValueComments);
+                    msg, locationIndex, fieldComments, enumValueComments);
         }
     }
 
-    public static Map<String, String> collectEnumValueComments(Descriptors.Descriptor msg,
-                                                                Map<String, String> allEnumValueComments) {
+    static Map<String, String> collectEnumValueComments(
+            Descriptors.Descriptor msg,
+            Map<String, String> allEnumValueComments
+    ) {
         Map<String, String> result = new HashMap<>();
         collectEnumValueComments(msg, allEnumValueComments, result, "", new HashSet<>());
         return result;
     }
 
-    private static void collectEnumValueComments(Descriptors.Descriptor msg,
-                                                  Map<String, String> allEnumValueComments,
-                                                  Map<String, String> result, String prefix,
-                                                  Set<String> visited) {
+    private static void collectEnumValueComments(
+            Descriptors.Descriptor msg,
+            Map<String, String> allEnumValueComments,
+            Map<String, String> result, String prefix,
+            Set<String> visited
+    ) {
         String fullName = msg.getFullName();
         if (!visited.add(fullName)) return;
 
@@ -284,10 +345,15 @@ public final class DescriptorUtils {
         }
     }
 
-    private static void collectFromMessage(String pkgPrefix, String msgName, List<Integer> msgPrefix,
-                                            DescriptorProto msg, SourceCodeInfo sci,
-                                            Map<String, String> fieldComments,
-                                            Map<String, String> enumValueComments) {
+    private static void collectFromMessage(
+            String pkgPrefix,
+            String msgName,
+            List<Integer> msgPrefix,
+            DescriptorProto msg,
+            Map<List<Integer>, SourceCodeInfo.Location> locationIndex,
+            Map<String, String> fieldComments,
+            Map<String, String> enumValueComments
+    ) {
         String fullMsgName = pkgPrefix + msgName;
 
         for (int fi = 0; fi < msg.getFieldCount(); fi++) {
@@ -295,13 +361,13 @@ public final class DescriptorUtils {
             fieldPath.add(MSG_FIELD);
             fieldPath.add(fi);
 
-            String comment = findComment(sci, fieldPath);
+            String comment = findComment(locationIndex, fieldPath);
             if (comment != null) {
                 fieldComments.put(fullMsgName + "." + msg.getField(fi).getName(), comment);
             }
         }
 
-        collectEnumComment(sci, msg, msgPrefix, fullMsgName, enumValueComments);
+        collectEnumComment(locationIndex, msg, msgPrefix, fullMsgName, enumValueComments);
 
         for (int ni = 0; ni < msg.getNestedTypeCount(); ni++) {
             List<Integer> nestedPrefix = new ArrayList<>(msgPrefix);
@@ -309,13 +375,16 @@ public final class DescriptorUtils {
             nestedPrefix.add(ni);
 
             collectFromMessage(pkgPrefix, msgName + "." + msg.getNestedType(ni).getName(),
-                    nestedPrefix, msg.getNestedType(ni), sci, fieldComments, enumValueComments);
+                    nestedPrefix, msg.getNestedType(ni), locationIndex, fieldComments, enumValueComments);
         }
     }
 
-    private static void collectEnumComment(SourceCodeInfo sci, DescriptorProto msg,
-                                            List<Integer> msgPrefix, String fullMsgName,
-                                            Map<String, String> enumValueComments) {
+    private static void collectEnumComment(
+            Map<List<Integer>, SourceCodeInfo.Location> locationIndex,
+            DescriptorProto msg,
+            List<Integer> msgPrefix, String fullMsgName,
+            Map<String, String> enumValueComments
+    ) {
         for (int ei = 0; ei < msg.getEnumTypeCount(); ei++) {
             var enumType = msg.getEnumType(ei);
             for (int vi = 0; vi < enumType.getValueCount(); vi++) {
@@ -325,28 +394,11 @@ public final class DescriptorUtils {
                 enumPath.add(ENUM_VALUE);
                 enumPath.add(vi);
 
-                String comment = findComment(sci, enumPath);
+                String comment = findComment(locationIndex, enumPath);
                 if (comment != null) {
                     enumValueComments.put(fullMsgName + "." + enumType.getName() + "." + enumType.getValue(vi).getName(), comment);
                 }
             }
         }
-    }
-
-    private static String findComment(SourceCodeInfo sci, List<Integer> targetPath) {
-        for (SourceCodeInfo.Location loc : sci.getLocationList()) {
-            if (loc.getPathList().equals(targetPath)) {
-                String comment = loc.getLeadingComments();
-                if (!comment.isBlank()) {
-                    return comment.trim();
-                }
-                comment = loc.getTrailingComments();
-                if (!comment.isBlank()) {
-                    return comment.trim();
-                }
-                return null;
-            }
-        }
-        return null;
     }
 }

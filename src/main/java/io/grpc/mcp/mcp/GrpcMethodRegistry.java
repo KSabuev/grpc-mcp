@@ -1,11 +1,12 @@
 package io.grpc.mcp.mcp;
 
+import io.grpc.mcp.exceptions.MethodNotFoundException;
+import io.grpc.mcp.grpc.discovery.MethodMeta;
+import io.grpc.mcp.grpc.discovery.ServiceDiscoverer;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import io.grpc.mcp.grpc.discovery.MethodMeta;
-import io.grpc.mcp.grpc.discovery.ServiceDiscoverer;
 
 import java.util.List;
 import java.util.Map;
@@ -43,10 +44,10 @@ public class GrpcMethodRegistry {
         return methodNames;
     }
 
-    public MethodMeta getMethod(String fullName) {
+    public MethodMeta getMethod(String fullName) throws MethodNotFoundException {
         MethodMeta meta = methods.get(fullName);
         if (meta == null) {
-            throw new IllegalArgumentException("""
+            throw new MethodNotFoundException("""
                     Метод "%s" не найден.
                     Используйте list_methods, чтобы получить точное полное имя.
                     Пример формата: "com.example.MyService/myMethod".""".formatted(fullName));

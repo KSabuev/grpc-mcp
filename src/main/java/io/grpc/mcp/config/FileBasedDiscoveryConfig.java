@@ -1,11 +1,13 @@
 package io.grpc.mcp.config;
 
+import io.grpc.mcp.grpc.discovery.DescriptorFileServiceDiscoverer;
+import io.grpc.mcp.grpc.discovery.DescriptorParser;
+import io.grpc.mcp.grpc.discovery.ProtoCompiler;
+import io.grpc.mcp.grpc.discovery.ServiceDiscoverer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import io.grpc.mcp.grpc.discovery.DescriptorFileServiceDiscoverer;
-import io.grpc.mcp.grpc.discovery.ServiceDiscoverer;
 
 @Configuration
 @ConditionalOnExpression("!'${grpc.proto-file:}'.isEmpty()")
@@ -13,11 +15,20 @@ import io.grpc.mcp.grpc.discovery.ServiceDiscoverer;
 public class FileBasedDiscoveryConfig {
 
     @Bean
-    public ServiceDiscoverer fileBasedDiscoverer(GrpcProperties properties) {
-        String protoFile = properties.getProtoFile();
-        log.info("Discovery mode: FILE (proto file: {})", protoFile);
+    public ProtoCompiler protoCompiler(GrpcProperties properties) {
+        return new ProtoCompiler(properties.getProtoFile(), properties.getProtocTimeout());
+    }
+
+    @Bean
+    public DescriptorParser descriptorParser() {
+        return new DescriptorParser();
+    }
+
+    @Bean
+    public ServiceDiscoverer fileBasedDiscoverer(ProtoCompiler protoCompiler, DescriptorParser descriptorParser) {
+        log.info("Discovery mode: FILE");
         DescriptorFileServiceDiscoverer discoverer = new DescriptorFileServiceDiscoverer(
-                protoFile, properties.getProtocTimeout());
+                protoCompiler, descriptorParser);
         discoverer.discover();
         return discoverer;
     }

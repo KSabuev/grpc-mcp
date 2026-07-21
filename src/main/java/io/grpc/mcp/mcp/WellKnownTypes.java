@@ -1,18 +1,30 @@
 package io.grpc.mcp.mcp;
 
 import com.google.protobuf.Descriptors;
+import io.grpc.mcp.config.GrpcProperties;
+import jakarta.annotation.PostConstruct;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 @Component
+@RequiredArgsConstructor
 public class WellKnownTypes {
 
+    private final GrpcProperties properties;
+
+    private Map<String, GrpcProperties.WktInfo> wktMap = new LinkedHashMap<>();
+
+    @PostConstruct
+    public void init() {
+        wktMap = new LinkedHashMap<>(properties.getWellKnownTypes());
+    }
+
     public String getSchemaFormat(String typeName) {
-        return switch (typeName) {
-            case "google.protobuf.Timestamp" -> "date-time";
-            case "google.type.Date" -> "date";
-            case "google.protobuf.Duration" -> "duration";
-            default -> null;
-        };
+        GrpcProperties.WktInfo info = wktMap.get(typeName);
+        return info != null ? info.format() : null;
     }
 
     public String getSchemaFormat(Descriptors.FieldDescriptor field) {
@@ -23,12 +35,8 @@ public class WellKnownTypes {
     }
 
     public String getExample(String typeName) {
-        return switch (typeName) {
-            case "google.protobuf.Timestamp" -> "2024-01-01T00:00:00Z";
-            case "google.type.Date" -> "2024-01-01";
-            case "google.protobuf.Duration" -> "1s";
-            default -> null;
-        };
+        GrpcProperties.WktInfo info = wktMap.get(typeName);
+        return info != null ? info.example() : null;
     }
 
     public String getExample(Descriptors.FieldDescriptor field) {
@@ -37,4 +45,5 @@ public class WellKnownTypes {
         }
         return null;
     }
+
 }

@@ -1,12 +1,10 @@
-package io.grpc.mcp.schema;
+package io.grpc.mcp.mcp;
 
 import com.google.protobuf.DescriptorProtos;
 import com.google.protobuf.Descriptors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import io.grpc.mcp.config.GrpcProperties;
-import io.grpc.mcp.mcp.ProtoSchemaConverter;
-import io.grpc.mcp.mcp.WellKnownTypes;
 
 import java.time.Duration;
 import java.util.Map;
@@ -33,8 +31,10 @@ class ProtoSchemaConverterTest {
         properties.setProtocTimeout(Duration.ofSeconds(10));
         properties.setReflectionTimeout(Duration.ofSeconds(5));
         properties.setAddress("localhost:8080");
-        WellKnownTypes wellKnownTypes = new WellKnownTypes();
+        WellKnownTypes wellKnownTypes = new WellKnownTypes(properties);
+        wellKnownTypes.init();
         converter = new ProtoSchemaConverter(properties, wellKnownTypes);
+        converter.init();
     }
 
     private Descriptors.Descriptor buildSingleMessage(DescriptorProtos.DescriptorProto msg) {
@@ -300,6 +300,7 @@ class ProtoSchemaConverterTest {
     @Test
     void maxDepthTruncatesNesting() {
         properties.setSchemaMaxDepth(1);
+        converter.init();
         var inner = DescriptorProtos.DescriptorProto.newBuilder()
                 .setName("Inner").build();
         var mid = DescriptorProtos.DescriptorProto.newBuilder()

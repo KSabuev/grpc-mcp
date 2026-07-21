@@ -1,13 +1,15 @@
 package io.grpc.mcp.mcp;
 
 import com.google.protobuf.Descriptors;
+import io.grpc.mcp.config.GrpcProperties;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
-import io.grpc.mcp.config.GrpcProperties;
 
 import java.util.*;
 
-import static io.grpc.mcp.mcp.SchemaMap.entry;
+import static io.grpc.mcp.mcp.JsonSchemaKeys.CIRCULAR_REFERENCE_PREFIX;
+import static io.grpc.mcp.mcp.JsonSchemaKeys.DESCRIPTION;
 
 @Component
 @RequiredArgsConstructor
@@ -16,21 +18,31 @@ public class ProtoSchemaConverter {
     private final GrpcProperties properties;
     private final WellKnownTypes wellKnownTypes;
 
-    public Map<String, Object> toJsonSchema(Descriptors.Descriptor descriptor,
-                                             Map<String, String> fieldComments,
-                                             Map<String, String> enumValueComments) {
+    private int maxDepth;
+
+    @PostConstruct
+    public void init() {
+        this.maxDepth = properties.getSchemaMaxDepth();
+    }
+
+    public Map<String, Object> toJsonSchema(
+            Descriptors.Descriptor descriptor,
+            Map<String, String> fieldComments,
+            Map<String, String> enumValueComments
+    ) {
         return toJsonSchema(descriptor, new HashSet<>(), 0, fieldComments, enumValueComments);
     }
 
     private static boolean isOptionalField(Descriptors.FieldDescriptor field) {
-        return field.isRepeated()
-                || field.isMapField()
-                || field.getContainingOneof() != null;
+        return field.isRepeated() || field.isMapField() || field.getContainingOneof() != null;
     }
 
-    private Map<String, Object> toJsonSchema(Descriptors.Descriptor descriptor, Set<String> visited, int depth,
-                                               Map<String, String> fieldComments,
-                                               Map<String, String> enumValueComments) {
+    private Map<String, Object> toJsonSchema(
+            Descriptors.Descriptor descriptor,
+            Set<String> visited, int depth,
+            Map<String, String> fieldComments,
+            Map<String, String> enumValueComments
+    ) {
         Map<String, Object> properties = new LinkedHashMap<>();
         List<String> required = new ArrayList<>();
 
@@ -46,83 +58,96 @@ public class ProtoSchemaConverter {
             properties.put(field.getName(), fieldSchema);
         }
 
-        Map<String, Object> schema = entry("object");
-        schema.put("properties", properties);
-        if (!required.isEmpty()) {
-            schema.put("required", required);
-        }
-        return schema;
+        return JsonSchemaBuilder.object()
+                .properties(properties)
+                .required(required)
+                .build();
     }
 
-    private Map<String, Object> convertField(Descriptors.FieldDescriptor field, Set<String> visited, int depth,
-                                              Map<String, String> fieldComments,
-                                              Map<String, String> enumValueComments) {
+    private Map<String, Object> convertField(
+            Descriptors.FieldDescriptor field,
+            Set<String> visited, int depth,
+            Map<String, String> fieldComments,
+            Map<String, String> enumValueComments
+    ) {
         if (field.isMapField()) {
-            Map<String, Object> mapSchema = entry("object");
-            mapSchema.put("additionalProperties", convertSingleField(field, visited, depth, fieldComments, enumValueComments));
-            return mapSchema;
+            return JsonSchemaBuilder.object()
+                    .additionalProperties(convertSingleField(field, visited, depth, fieldComments, enumValueComments))
+                    .build();
         }
 
         if (field.isRepeated()) {
-            Map<String, Object> items = convertSingleField(field, visited, depth, fieldComments, enumValueComments);
-            Map<String, Object> array = entry("array");
-            array.put("items", items);
-            return array;
+            return JsonSchemaBuilder.array()
+                    .items(convertSingleFieldBuilder(field, visited, depth, fieldComments, enumValueComments))
+                    .build();
         }
 
         return convertSingleField(field, visited, depth, fieldComments, enumValueComments);
     }
 
-    private Map<String, Object> convertSingleField(Descriptors.FieldDescriptor field, Set<String> visited, int depth,
-                                                    Map<String, String> fieldComments,
-                                                    Map<String, String> enumValueComments) {
-        int maxDepth = properties.getSchemaMaxDepth();
+    private Map<String, Object> convertSingleField(
+            Descriptors.FieldDescriptor field,
+            Set<String> visited, int depth,
+            Map<String, String> fieldComments,
+            Map<String, String> enumValueComments
+    ) {
+        return convertSingleFieldBuilder(field, visited, depth, fieldComments, enumValueComments).build();
+    }
+
+    private JsonSchemaBuilder convertSingleFieldBuilder(
+            Descriptors.FieldDescriptor field,
+            Set<String> visited, int depth,
+            Map<String, String> fieldComments,
+            Map<String, String> enumValueComments
+    ) {
         return switch (field.getJavaType()) {
-            case INT, LONG -> entry("integer");
-            case FLOAT, DOUBLE -> entry("number");
-            case BOOLEAN -> entry("boolean");
-            case STRING -> entry("string", "format", wellKnownTypes.getSchemaFormat(field));
-            case BYTE_STRING -> entry("string", "contentEncoding", "base64");
-            case ENUM -> enumEntry(field);
-            case MESSAGE -> messageEntry(field, visited, depth, maxDepth, fieldComments, enumValueComments);
-            default -> entry("string");
+            case INT, LONG -> JsonSchemaBuilder.integer();
+            case FLOAT, DOUBLE -> JsonSchemaBuilder.number();
+            case BOOLEAN -> JsonSchemaBuilder.bool();
+            case STRING -> JsonSchemaBuilder.string().format(wellKnownTypes.getSchemaFormat(field));
+            case BYTE_STRING -> JsonSchemaBuilder.string().contentEncoding("base64");
+            case ENUM -> enumBuilder(field);
+            case MESSAGE -> messageBuilder(field, visited, depth, fieldComments, enumValueComments);
+            default -> JsonSchemaBuilder.string();
         };
     }
 
-    private Map<String, Object> enumEntry(Descriptors.FieldDescriptor field) {
-        Map<String, Object> s = entry("string");
+    private JsonSchemaBuilder enumBuilder(Descriptors.FieldDescriptor field) {
         List<String> enumValues = field.getEnumType().getValues().stream()
                 .map(Descriptors.EnumValueDescriptor::getName)
                 .toList();
-        if (!enumValues.isEmpty()) {
-            s.put("enum", enumValues);
-        }
-        return s;
+        return JsonSchemaBuilder.string().enumValues(enumValues);
     }
 
-    private Map<String, Object> messageEntry(Descriptors.FieldDescriptor field, Set<String> visited, int depth,
-                                              int maxDepth,
-                                              Map<String, String> fieldComments,
-                                              Map<String, String> enumValueComments) {
+    private JsonSchemaBuilder messageBuilder(
+            Descriptors.FieldDescriptor field,
+            Set<String> visited, int depth,
+            Map<String, String> fieldComments,
+            Map<String, String> enumValueComments
+    ) {
         String msgName = field.getMessageType().getFullName();
         String wktFormat = wellKnownTypes.getSchemaFormat(msgName);
         if (wktFormat != null) {
-            return entry("string", "format", wktFormat);
+            return JsonSchemaBuilder.string().format(wktFormat);
         }
         if (depth >= maxDepth || visited.contains(msgName)) {
-            return entry("string", "description", "Message: " + msgName);
+            return JsonSchemaBuilder.string().description(CIRCULAR_REFERENCE_PREFIX + msgName);
         }
         visited.add(msgName);
-        return toJsonSchema(field.getMessageType(), visited, depth + 1, fieldComments, enumValueComments);
+        Map<String, Object> nestedSchema = toJsonSchema(field.getMessageType(), visited, depth + 1, fieldComments, enumValueComments);
+        return JsonSchemaBuilder.object().putAll(nestedSchema);
     }
 
-    private void addFieldDescription(Map<String, Object> schema, Descriptors.FieldDescriptor field,
-                                      Map<String, String> fieldComments,
-                                      Map<String, String> enumValueComments) {
+    private void addFieldDescription(
+            Map<String, Object> schema,
+            Descriptors.FieldDescriptor field,
+            Map<String, String> fieldComments,
+            Map<String, String> enumValueComments
+    ) {
         if (field.getJavaType() == Descriptors.FieldDescriptor.JavaType.ENUM) {
             String enumDesc = buildEnumDescription(field, enumValueComments);
             if (enumDesc != null) {
-                schema.put("description", enumDesc);
+                schema.put(DESCRIPTION, enumDesc);
                 return;
             }
         }
@@ -141,7 +166,7 @@ public class ProtoSchemaConverter {
         } else {
             desc.add("proto type: " + field.getType().name());
         }
-        schema.put("description", desc.toString());
+        schema.put(DESCRIPTION, desc.toString());
     }
 
     private String buildMapProtoType(Descriptors.FieldDescriptor field) {

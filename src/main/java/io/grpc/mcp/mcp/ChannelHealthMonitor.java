@@ -1,21 +1,20 @@
 package io.grpc.mcp.mcp;
 
 import io.grpc.ConnectivityState;
+import io.grpc.ManagedChannel;
+import io.grpc.mcp.config.GrpcProperties;
+import io.grpc.mcp.grpc.channel.GrpcChannelManager;
+import io.grpc.mcp.grpc.discovery.ServiceDiscoverer;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
-import io.grpc.mcp.config.GrpcProperties;
-import io.grpc.mcp.grpc.channel.GrpcChannelManager;
-import io.grpc.mcp.grpc.discovery.ServiceDiscoverer;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.*;
 
 @Component
 @RequiredArgsConstructor
@@ -31,6 +30,7 @@ public class ChannelHealthMonitor {
 
     private volatile Instant lastReconnect = Instant.EPOCH;
     private Duration healthCheckInterval;
+    private ExecutorService rediscoveryExecutor;
 
     @PostConstruct
     public void schedule() {
@@ -38,12 +38,23 @@ public class ChannelHealthMonitor {
         if (healthCheckInterval == null || healthCheckInterval.isZero() || healthCheckInterval.isNegative()) {
             healthCheckInterval = Duration.ofSeconds(1);
         }
+        rediscoveryExecutor = Executors.newSingleThreadExecutor(
+                Thread.ofPlatform().daemon().name("rediscovery-", 0).factory()
+        );
         taskExecutor.scheduleWithFixedDelay(
                 this::scheduledCheck, 0, healthCheckInterval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
+    @PreDestroy
+    public void shutdown() {
+        if (rediscoveryExecutor != null) {
+            rediscoveryExecutor.shutdownNow();
+        }
+    }
+
     public void scheduledCheck() {
-        ConnectivityState state = channelManager.getChannel().getState(true);
+        ManagedChannel ch = channelManager.getChannel();
+        ConnectivityState state = ch.getState(true);
         if (state == ConnectivityState.TRANSIENT_FAILURE || state == ConnectivityState.SHUTDOWN) {
             log.warn("Channel in state {}, attempting recovery...", state);
             reconnectAndRediscover(state);
@@ -60,16 +71,17 @@ public class ChannelHealthMonitor {
         lastReconnect = Instant.now();
 
         channelManager.reconnect();
-        ConnectivityState newState = channelManager.getChannel().getState(false);
+        ManagedChannel newChannel = channelManager.getChannel();
+        ConnectivityState newState = newChannel.getState(false);
 
         if (properties.getProtoFile() == null || properties.getProtoFile().isBlank()) {
             try {
-                CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                    discovery.rediscover(channelManager.getChannel());
-                    registry.updateMethods(discovery.getMethods());
-                }, taskExecutor);
-
                 Duration timeout = properties.getReflectionTimeout();
+                CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                    discovery.rediscover(newChannel);
+                    registry.updateMethods(discovery.getMethods());
+                }, rediscoveryExecutor);
+
                 if (timeout != null) {
                     future.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
                 } else {

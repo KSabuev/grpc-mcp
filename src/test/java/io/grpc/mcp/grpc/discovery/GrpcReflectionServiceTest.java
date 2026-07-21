@@ -10,6 +10,7 @@ import io.grpc.reflection.v1alpha.ServerReflectionRequest;
 import io.grpc.reflection.v1alpha.ServerReflectionResponse;
 import io.grpc.reflection.v1alpha.ServiceResponse;
 import io.grpc.stub.ClientCalls;
+import io.grpc.mcp.exceptions.DiscoveryException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Answers;
@@ -20,6 +21,7 @@ import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -90,7 +92,10 @@ class GrpcReflectionServiceTest {
                     .thenThrow(new RuntimeException("reflection error"));
 
             var service = new GrpcReflectionService(channel, "test-server", Duration.ofSeconds(5));
-            service.discover();
+
+            assertThatThrownBy(() -> service.discover())
+                    .isInstanceOf(DiscoveryException.class)
+                    .hasMessageContaining("Failed to discover gRPC methods");
 
             assertThat(service.getServices()).isEmpty();
             assertThat(service.getMethods()).isEmpty();

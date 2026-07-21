@@ -50,8 +50,12 @@ class GetMethodSchemaToolTest {
         props.setAddress("localhost:8080");
 
         mapper = McpJsonDefaults.getMapper();
-        var converter = new ProtoSchemaConverter(props, new WellKnownTypes());
-        var exampleGen = new ExampleGenerator(props, new WellKnownTypes());
+        var wkt = new WellKnownTypes(props);
+        wkt.init();
+        var converter = new ProtoSchemaConverter(props, wkt);
+        converter.init();
+        var exampleGen = new ExampleGenerator(props, wkt);
+        exampleGen.init();
         tool = new GetMethodSchemaTool(registry, converter, exampleGen, mapper);
 
         inputDesc = msg("Input",

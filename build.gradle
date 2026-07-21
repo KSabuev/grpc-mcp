@@ -27,6 +27,7 @@ repositories {
 ext {
     grpcVersion = '1.76.0'
     protobufVersion = '4.28.3'
+    mcpSdkVersion = '2.0.0'
 }
 
 dependencies {
@@ -38,14 +39,16 @@ dependencies {
     // Lombok
     compileOnly 'org.projectlombok:lombok'
     annotationProcessor 'org.projectlombok:lombok'
+    testCompileOnly 'org.projectlombok:lombok'
+    testAnnotationProcessor 'org.projectlombok:lombok'
 
     // MCP Java SDK (BOM + core + Jackson2 for Spring Boot compatibility)
-    implementation platform('io.modelcontextprotocol.sdk:mcp-bom:2.0.0')
+    implementation platform("io.modelcontextprotocol.sdk:mcp-bom:${mcpSdkVersion}")
     implementation 'io.modelcontextprotocol.sdk:mcp-core'
     implementation 'io.modelcontextprotocol.sdk:mcp-json-jackson2'
 
     // gRPC and protobuf
-    implementation "io.grpc:grpc-netty-shaded:1.76.0"
+    implementation "io.grpc:grpc-netty-shaded:${grpcVersion}"
     implementation "io.grpc:grpc-protobuf:${grpcVersion}"
     implementation "io.grpc:grpc-stub:${grpcVersion}"
     implementation "io.grpc:grpc-api:${grpcVersion}"
@@ -57,24 +60,23 @@ dependencies {
     // protobuf JSON format
     implementation "com.google.protobuf:protobuf-java-util:${protobufVersion}"
 
+    // JSON Schema validator
+    implementation 'com.github.java-json-tools:json-schema-validator:2.2.14'
+
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 }
 
-configurations.all {
-    resolutionStrategy.cacheChangingModulesFor(0, 'seconds')
-}
-
-tasks.withType(JavaCompile) {
+tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.compilerArgs << '-parameters'
 }
 
 tasks.named('bootJar') {
-    archiveFileName = "grpc-mcp-${project.version}.jar"
+    archiveFileName.set("grpc-mcp-${project.version}.jar")
 }
 
 bootBuildImage {
-    imageName = 'grpc-mcp:1.0'
+    imageName = "grpc-mcp:${project.version}"
 }
 
 test {
