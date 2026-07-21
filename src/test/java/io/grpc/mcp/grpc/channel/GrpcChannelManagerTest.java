@@ -50,6 +50,7 @@ class GrpcChannelManagerTest {
         p.setProtocTimeout(Duration.ofSeconds(10));
         p.setReflectionTimeout(Duration.ofSeconds(5));
         p.setSchemaMaxDepth(8);
+        p.setChannelShutdownTimeout(Duration.ofSeconds(5));
         return p;
     }
 

@@ -5,6 +5,7 @@ import com.google.protobuf.DescriptorProtos.FileDescriptorProto;
 import io.grpc.CallOptions;
 import io.grpc.ManagedChannel;
 import io.grpc.MethodDescriptor;
+import io.grpc.mcp.exceptions.DiscoveryException;
 import io.grpc.reflection.v1alpha.ServerReflectionGrpc;
 import io.grpc.reflection.v1alpha.ServerReflectionRequest;
 import io.grpc.reflection.v1alpha.ServerReflectionResponse;
@@ -21,7 +22,7 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class GrpcReflectionService implements ServiceDiscoverer {
 
-    private ManagedChannel channel;
+    private volatile ManagedChannel channel;
     private final String serverName;
     private final Duration reflectionTimeout;
     private final MethodDescriptor<ServerReflectionRequest, ServerReflectionResponse> reflectionMethod =
@@ -52,8 +53,10 @@ public class GrpcReflectionService implements ServiceDiscoverer {
             services.addAll(result.serviceNames());
             methods.addAll(result.methods());
             log.info("Discovered {} total methods on server '{}'", methods.size(), serverName);
+        } catch (DiscoveryException e) {
+            throw e;
         } catch (Exception e) {
-            log.error("Failed to discover gRPC methods on server '{}': {}", serverName, e.getMessage(), e);
+            throw new DiscoveryException("Failed to discover gRPC methods on server '" + serverName + "'", e);
         }
     }
 

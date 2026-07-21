@@ -1,10 +1,9 @@
-package io.grpc.mcp.grpc.retry;
+package io.grpc.mcp.config;
 
 import io.grpc.Status;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.retry.RetryContext;
-import io.grpc.mcp.config.GrpcRetryPolicy;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

@@ -1,5 +1,6 @@
 package io.grpc.mcp.mcp;
 
+import io.grpc.mcp.config.GrpcProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -11,7 +12,9 @@ class WellKnownTypesTest {
 
     @BeforeEach
     void setUp() {
-        types = new WellKnownTypes();
+        var props = new GrpcProperties();
+        types = new WellKnownTypes(props);
+        types.init();
     }
 
     @Test

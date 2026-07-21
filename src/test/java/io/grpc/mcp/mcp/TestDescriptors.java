@@ -1,4 +1,4 @@
-package io.grpc.mcp.schema;
+package io.grpc.mcp.mcp;
 
 import com.google.protobuf.DescriptorProtos;
 import com.google.protobuf.Descriptors;

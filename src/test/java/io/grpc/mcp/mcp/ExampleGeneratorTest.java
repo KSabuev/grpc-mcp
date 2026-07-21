@@ -1,12 +1,10 @@
-package io.grpc.mcp.schema;
+package io.grpc.mcp.mcp;
 
 import com.google.protobuf.DescriptorProtos;
 import com.google.protobuf.Descriptors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import io.grpc.mcp.config.GrpcProperties;
-import io.grpc.mcp.mcp.ExampleGenerator;
-import io.grpc.mcp.mcp.WellKnownTypes;
 
 import java.time.Duration;
 import java.util.Map;
@@ -33,7 +31,10 @@ class ExampleGeneratorTest {
         properties.setProtocTimeout(Duration.ofSeconds(10));
         properties.setReflectionTimeout(Duration.ofSeconds(5));
         properties.setAddress("localhost:8080");
-        generator = new ExampleGenerator(properties, new WellKnownTypes());
+        WellKnownTypes wkt = new WellKnownTypes(properties);
+        wkt.init();
+        generator = new ExampleGenerator(properties, wkt);
+        generator.init();
     }
 
     @Test
@@ -204,6 +205,7 @@ class ExampleGeneratorTest {
     @Test
     void generateExample_maxDepth_truncates() {
         properties.setSchemaMaxDepth(1);
+        generator.init();
         var inner = DescriptorProtos.DescriptorProto.newBuilder()
                 .setName("Inner").build();
         var mid = DescriptorProtos.DescriptorProto.newBuilder()

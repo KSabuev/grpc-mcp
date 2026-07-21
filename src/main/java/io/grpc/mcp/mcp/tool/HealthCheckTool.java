@@ -24,8 +24,7 @@ public class HealthCheckTool implements McpTool {
 
     @Override
     public McpServerFeatures.SyncToolSpecification build() {
-        McpSchema.Tool tool = McpSchema.Tool.builder("health",
-                        Map.of("type", "object", "properties", Map.of()))
+        McpSchema.Tool tool = McpSchema.Tool.builder("health", ToolArgs.EMPTY_INPUT_SCHEMA)
                 .description("""
                         Проверить доступность gRPC сервера.
                         Возвращает: channelState (READY/IDLE/CONNECTING/TRANSIENT_FAILURE/SHUTDOWN),

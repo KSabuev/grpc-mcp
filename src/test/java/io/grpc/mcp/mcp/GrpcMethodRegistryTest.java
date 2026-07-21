@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import io.grpc.mcp.exceptions.MethodNotFoundException;
 import io.grpc.mcp.grpc.discovery.MethodMeta;
 import io.grpc.mcp.grpc.discovery.ServiceDiscoverer;
 
@@ -97,7 +98,7 @@ class GrpcMethodRegistryTest {
         registry.updateMethods(List.of(m1));
 
         assertThatThrownBy(() -> registry.getMethod("unknown"))
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(MethodNotFoundException.class)
                 .hasMessageContaining("не найден");
     }
 }

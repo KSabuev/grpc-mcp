@@ -8,8 +8,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import io.grpc.mcp.mcp.GrpcMethodRegistry;
 
-import java.util.Map;
-
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -20,8 +18,7 @@ public class ListMethodsTool implements McpTool {
 
     @Override
     public McpServerFeatures.SyncToolSpecification build() {
-        McpSchema.Tool tool = McpSchema.Tool.builder("list_methods",
-                        Map.of("type", "object", "properties", Map.of()))
+        McpSchema.Tool tool = McpSchema.Tool.builder("list_methods", ToolArgs.EMPTY_INPUT_SCHEMA)
                 .description("""
                         Возвращает массив строк — полные имена gRPC методов в формате "package.ServiceName/methodName".
                         Включает unary и streaming методы.
@@ -41,10 +38,7 @@ public class ListMethodsTool implements McpTool {
                                 .build();
                     } catch (Exception e) {
                         log.error("Error listing methods: {}", e.getMessage(), e);
-                        return McpSchema.CallToolResult.builder()
-                                .addTextContent(e.getClass().getSimpleName() + ": " + e.getMessage())
-                                .isError(true)
-                                .build();
+                        return ToolResults.error(e.getClass().getSimpleName() + ": " + e.getMessage());
                     }
                 })
                 .build();

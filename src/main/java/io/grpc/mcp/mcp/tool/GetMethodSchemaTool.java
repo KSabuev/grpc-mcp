@@ -6,6 +6,7 @@ import io.modelcontextprotocol.spec.McpSchema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import io.grpc.mcp.exceptions.MethodNotFoundException;
 import io.grpc.mcp.mcp.ExampleGenerator;
 import io.grpc.mcp.mcp.GrpcMethodRegistry;
 import io.grpc.mcp.mcp.ProtoSchemaConverter;
@@ -13,17 +14,21 @@ import io.grpc.mcp.mcp.ProtoSchemaConverter;
 import java.util.List;
 import java.util.Map;
 
+import static io.grpc.mcp.mcp.JsonSchemaKeys.*;
+import static io.grpc.mcp.mcp.JsonSchemaType.*;
+import static io.grpc.mcp.mcp.tool.ToolArgs.*;
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class GetMethodSchemaTool implements McpTool {
 
     private static final Map<String, Object> INPUT_SCHEMA = Map.of(
-            "type", "object",
-            "properties", Map.of("method", Map.of(
-                    "type", "string",
-                    "description", "Полное имя метода из list_methods")),
-            "required", List.of("method")
+            TYPE, OBJECT.getValue(),
+            PROPERTIES, Map.of(METHOD, Map.of(
+                    TYPE, STRING.getValue(),
+                    DESCRIPTION, METHOD_DESCRIPTION)),
+            REQUIRED, List.of(METHOD)
     );
 
     private final GrpcMethodRegistry registry;
@@ -47,7 +52,7 @@ public class GetMethodSchemaTool implements McpTool {
                 .tool(tool)
                 .callHandler((exchange, request) -> {
                     try {
-                        String methodName = (String) request.arguments().get("method");
+                        String methodName = (String) request.arguments().get(METHOD);
                         var meta = registry.getMethod(methodName);
 
                         Map<String, Object> inputSchema = schemaConverter.toJsonSchema(
@@ -91,19 +96,13 @@ public class GetMethodSchemaTool implements McpTool {
                         return McpSchema.CallToolResult.builder()
                                 .addTextContent(resultJson)
                                 .build();
-                    } catch (IllegalArgumentException e) {
-                        log.error("Invalid method name: {}", e.getMessage());
-                        return McpSchema.CallToolResult.builder()
-                                .addTextContent(e.getMessage())
-                                .isError(true)
-                                .build();
+                    } catch (MethodNotFoundException e) {
+                        log.error("Method not found: {}", e.getMessage());
+                        return ToolResults.error(e.getMessage());
                     } catch (Exception e) {
                         log.error("Error getting schema: {}", e.getMessage(), e);
-                        return McpSchema.CallToolResult.builder()
-                                .addTextContent("Ошибка получения схемы для метода: " + e.getMessage()
-                                        + ". Проверьте имя метода через list_methods.")
-                                .isError(true)
-                                .build();
+                        return ToolResults.error("Ошибка получения схемы для метода: " + e.getMessage()
+                                + ". Проверьте имя метода через list_methods.");
                     }
                 })
                 .build();

@@ -35,3 +35,6 @@ grpc:
   reflection-timeout: ${GRPC_REFLECTION_TIMEOUT:10s}
   protoc-timeout: ${GRPC_PROTOC_TIMEOUT:10s}
   schema-max-depth: ${GRPC_SCHEMA_MAX_DEPTH:10}
+  channel-shutdown-timeout: ${GRPC_CHANNEL_SHUTDOWN_TIMEOUT:1000ms}
+  tls-insecure: ${GRPC_TLS_INSECURE:false}
+  tls-trust-cert: ${GRPC_TLS_TRUST_CERT:}

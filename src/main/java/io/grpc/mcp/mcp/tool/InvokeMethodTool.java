@@ -9,6 +9,12 @@ import io.grpc.ClientInterceptors;
 import io.grpc.Metadata;
 import io.grpc.MethodDescriptor;
 import io.grpc.StatusRuntimeException;
+import io.grpc.mcp.config.GrpcProperties;
+import io.grpc.mcp.exceptions.MethodNotFoundException;
+import io.grpc.mcp.grpc.channel.GrpcChannelManager;
+import io.grpc.mcp.grpc.channel.MetadataInterceptor;
+import io.grpc.mcp.mcp.ChannelRecoveredEvent;
+import io.grpc.mcp.mcp.GrpcMethodRegistry;
 import io.grpc.protobuf.ProtoUtils;
 import io.grpc.stub.ClientCalls;
 import io.modelcontextprotocol.json.McpJsonMapper;
@@ -21,11 +27,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.stereotype.Component;
-import io.grpc.mcp.config.GrpcProperties;
-import io.grpc.mcp.grpc.channel.GrpcChannelManager;
-import io.grpc.mcp.grpc.channel.MetadataInterceptor;
-import io.grpc.mcp.mcp.ChannelRecoveredEvent;
-import io.grpc.mcp.mcp.GrpcMethodRegistry;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -36,33 +37,37 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
+import static io.grpc.mcp.mcp.JsonSchemaKeys.*;
+import static io.grpc.mcp.mcp.JsonSchemaType.*;
+import static io.grpc.mcp.mcp.tool.ToolArgs.*;
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class InvokeMethodTool implements McpTool {
 
     private static final Map<String, Object> INPUT_SCHEMA = Map.of(
-            "type", "object",
-            "properties", Map.of(
-                    "method", Map.of("type", "string", "description", "Полное имя метода из list_methods"),
-                    "arguments", Map.of(
-                            "oneOf", List.of(
-                                    Map.of("type", "object", "description", "Одно сообщение (unary, server-streaming)"),
-                                    Map.of("type", "array", "items", Map.of("type", "object"),
-                                            "description", "Массив сообщений (client-streaming)"),
-                                    Map.of("type", "string",
-                                            "description", "JSON-строка с объектом или массивом")),
-                            "description", "Аргументы gRPC метода."),
-                    "metadata", Map.of(
-                            "type", "object",
-                            "additionalProperties", Map.of("type", "string"),
-                            "description",
+            TYPE, OBJECT.getValue(),
+            PROPERTIES, Map.of(
+                    METHOD, Map.of(TYPE, STRING.getValue(), DESCRIPTION, METHOD_DESCRIPTION),
+                    ARGUMENTS, Map.of(
+                            ONE_OF, List.of(
+                                    Map.of(TYPE, OBJECT.getValue(), DESCRIPTION, "Одно сообщение (unary, server-streaming)"),
+                                    Map.of(TYPE, ARRAY.getValue(), ITEMS, Map.of(TYPE, OBJECT.getValue()),
+                                            DESCRIPTION, "Массив сообщений (client-streaming)"),
+                                    Map.of(TYPE, STRING.getValue(),
+                                            DESCRIPTION, "JSON-строка с объектом или массивом")),
+                            DESCRIPTION, "Аргументы gRPC метода."),
+                    METADATA, Map.of(
+                            TYPE, OBJECT.getValue(),
+                            ADDITIONAL_PROPERTIES, Map.of(TYPE, STRING.getValue()),
+                            DESCRIPTION,
                             "gRPC заголовки. Ключ — заголовок (string), значение — строка. Пример: Authorization=Bearer <JWT>"),
-                    "maxServerMessages", Map.of(
-                            "type", "integer",
-                            "description",
+                    MAX_SERVER_MESSAGES, Map.of(
+                            TYPE, INTEGER.getValue(),
+                            DESCRIPTION,
                             "Опционально. Максимальное количество сообщений для server-streaming. При превышении ответ обрезается до этого количества. По умолчанию 100.")),
-            "required", List.of("method", "arguments")
+            REQUIRED, List.of(METHOD, ARGUMENTS)
     );
 
     private static final String TOOL_DESCRIPTION = """
@@ -138,7 +143,7 @@ public class InvokeMethodTool implements McpTool {
 
     private McpSchema.CallToolResult invoke(McpSchema.CallToolRequest request) {
         try {
-            String methodName = (String) request.arguments().get("method");
+            String methodName = (String) request.arguments().get(METHOD);
             var meta = registry.getMethod(methodName);
 
             if (meta.clientStreaming() && meta.serverStreaming()) {
@@ -146,7 +151,7 @@ public class InvokeMethodTool implements McpTool {
             }
 
             List<DynamicMessage> requests = parseRequestMessages(
-                    request.arguments().get("arguments"), meta.inputDescriptor());
+                    request.arguments().get(ARGUMENTS), meta.inputDescriptor());
 
             if (requests.isEmpty()) {
                 return ToolResults.error("arguments не должен быть пустым");
@@ -156,7 +161,7 @@ public class InvokeMethodTool implements McpTool {
             Map<String, String> callMetadata = extractMetadata(request);
 
             int maxMessages = DEFAULT_MAX_SERVER_MESSAGES;
-            Object rawMax = request.arguments().get("maxServerMessages");
+            Object rawMax = request.arguments().get(MAX_SERVER_MESSAGES);
             if (rawMax instanceof Number n && n.intValue() > 0) {
                 maxMessages = n.intValue();
             }
@@ -166,12 +171,12 @@ public class InvokeMethodTool implements McpTool {
                 case SERVER_STREAMING -> handleServerStreaming(md, requests.getFirst(), callMetadata, maxMessages);
                 default -> handleUnary(md, requests.getFirst(), callMetadata);
             };
+        } catch (MethodNotFoundException e) {
+            log.error("Method not found: {}", e.getMessage());
+            return ToolResults.error(e.getMessage());
         } catch (StatusRuntimeException e) {
             log.error("gRPC call failed after retries: {} {}", e.getStatus().getCode(), e.getMessage(), e);
             return ToolResults.error("Ошибка gRPC вызова: " + e.getStatus().getCode() + ": " + e.getMessage());
-        } catch (IllegalArgumentException e) {
-            log.error("Invalid arguments for method: {}", e.getMessage(), e);
-            return ToolResults.error(e.getMessage());
         } catch (com.google.protobuf.InvalidProtocolBufferException e) {
             log.error("Error parsing arguments: {}", e.getMessage(), e);
             return ToolResults.error("Ошибка парсинга аргументов: " + e.getMessage() + TIMESTAMP_HINT);
@@ -240,7 +245,7 @@ public class InvokeMethodTool implements McpTool {
     }
 
     private Map<String, String> extractMetadata(McpSchema.CallToolRequest request) {
-        Object raw = request.arguments().get("metadata");
+        Object raw = request.arguments().get(METADATA);
         if (raw == null) {
             return Map.of();
         }

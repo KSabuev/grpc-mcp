@@ -1,11 +1,14 @@
 package io.grpc.mcp.mcp;
 
 import com.google.protobuf.Descriptors;
+import io.grpc.mcp.config.GrpcProperties;
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
-import io.grpc.mcp.config.GrpcProperties;
 
 import java.util.*;
+
+import static io.grpc.mcp.mcp.JsonSchemaKeys.CIRCULAR_REFERENCE_PREFIX;
 
 @Component
 @RequiredArgsConstructor
@@ -13,6 +16,13 @@ public class ExampleGenerator {
 
     private final GrpcProperties properties;
     private final WellKnownTypes wellKnownTypes;
+
+    private int maxDepth;
+
+    @PostConstruct
+    public void init() {
+        this.maxDepth = properties.getSchemaMaxDepth();
+    }
 
     public Map<String, Object> generateExample(Descriptors.Descriptor descriptor) {
         return generateExample(descriptor, new HashSet<>(), 0);
@@ -62,9 +72,8 @@ public class ExampleGenerator {
     private Object generateMessageExample(Descriptors.Descriptor msgType,
                                            Set<String> visited, int depth) {
         String name = msgType.getFullName();
-        int maxDepth = properties.getSchemaMaxDepth();
         if (depth >= maxDepth || visited.contains(name)) {
-            return "Message: " + name;
+            return CIRCULAR_REFERENCE_PREFIX + name;
         }
 
         String wkt = wellKnownTypes.getExample(name);

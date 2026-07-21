@@ -2,6 +2,7 @@ package io.grpc.mcp.grpc.discovery;
 
 import com.google.protobuf.DescriptorProtos;
 import com.google.protobuf.DescriptorProtos.FileDescriptorSet;
+import io.grpc.mcp.exceptions.DiscoveryException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -16,20 +17,23 @@ class DescriptorFileServiceDiscovererTest {
 
     @Test
     void unsupportedFileExtension_throwsException() {
-        var discoverer = new DescriptorFileServiceDiscoverer("test.txt", Duration.ofSeconds(10));
+        var compiler = new ProtoCompiler("test.txt", Duration.ofSeconds(10));
+        var parser = new DescriptorParser();
+        var discoverer = new DescriptorFileServiceDiscoverer(compiler, parser);
 
         assertThatThrownBy(discoverer::discover)
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(DiscoveryException.class)
                 .hasMessageContaining("Unsupported file type");
     }
 
     @Test
     void descriptorFileNotFound_throwsException() {
-        var discoverer = new DescriptorFileServiceDiscoverer(
-                "/nonexistent/path/test.desc", Duration.ofSeconds(10));
+        var compiler = new ProtoCompiler("/nonexistent/path/test.desc", Duration.ofSeconds(10));
+        var parser = new DescriptorParser();
+        var discoverer = new DescriptorFileServiceDiscoverer(compiler, parser);
 
         assertThatThrownBy(discoverer::discover)
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(DiscoveryException.class)
                 .hasMessageContaining("Descriptor file not found");
     }
 
@@ -51,8 +55,9 @@ class DescriptorFileServiceDiscovererTest {
         Path descFile = tempDir.resolve("test.desc");
         Files.write(descFile, fds.toByteArray());
 
-        var discoverer = new DescriptorFileServiceDiscoverer(
-                descFile.toAbsolutePath().toString(), Duration.ofSeconds(10));
+        var compiler = new ProtoCompiler(descFile.toAbsolutePath().toString(), Duration.ofSeconds(10));
+        var parser = new DescriptorParser();
+        var discoverer = new DescriptorFileServiceDiscoverer(compiler, parser);
         discoverer.discover();
 
         assertThat(discoverer.getServices()).containsExactly("pkg.TestSvc");
@@ -62,11 +67,12 @@ class DescriptorFileServiceDiscovererTest {
 
     @Test
     void protoFileNotFound_throwsException() {
-        var discoverer = new DescriptorFileServiceDiscoverer(
-                "/nonexistent/path/test.proto", Duration.ofSeconds(10));
+        var compiler = new ProtoCompiler("/nonexistent/path/test.proto", Duration.ofSeconds(10));
+        var parser = new DescriptorParser();
+        var discoverer = new DescriptorFileServiceDiscoverer(compiler, parser);
 
         assertThatThrownBy(discoverer::discover)
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(DiscoveryException.class)
                 .hasMessageContaining("Proto file not found");
     }
 }

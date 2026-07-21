@@ -1,5 +1,28 @@
+## Java
+*.class
+*.jar
+*.war
+
 ## Gradle
 build/
 .gradle/
+gradlew
+gradlew.bat
+gradle/wrapper/
+
+## IDE
 .idea/
-/gradle/
+*.iml
+*.ipr
+*.iws
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Logs
+*.log
+
+## Environment / secrets
+.env
+.env.*
