@@ -14,18 +14,18 @@ import io.grpc.stub.ClientCalls;
 import io.modelcontextprotocol.json.McpJsonMapper;
 import io.modelcontextprotocol.json.TypeRef;
 import io.modelcontextprotocol.server.McpServerFeatures;
+import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.event.EventListener;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.stereotype.Component;
 import io.grpc.mcp.config.GrpcProperties;
-import io.grpc.mcp.grpc.channel.GrpcChannelManager;
+import io.grpc.mcp.config.GrpcRetryTemplateFactory;
+import io.grpc.mcp.connection.ConnectionProvider;
+import io.grpc.mcp.connection.GrpcConnection;
 import io.grpc.mcp.grpc.channel.MetadataInterceptor;
-import io.grpc.mcp.mcp.ChannelRecoveredEvent;
-import io.grpc.mcp.mcp.GrpcMethodRegistry;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -66,7 +66,8 @@ public class InvokeMethodTool implements McpTool {
     );
 
     private static final String TOOL_DESCRIPTION = """
-            Вызывает gRPC метод с переданными аргументами.
+            Вызывает gRPC метод с переданными аргументами на текущем подключении
+            (адрес — из headers GRPC-Host/GRPC-Port в конфиге MCP-клиента).
              Протокол вызова:
               1. list_methods — получить точное имя метода
               2. get_method_schema(method) — получить example с аргументами
@@ -86,11 +87,13 @@ public class InvokeMethodTool implements McpTool {
                 Пример: {"Authorization": "Bearer <JWT>", "X-Id": "123"}.
             Поддерживаются unary, server-streaming, client-streaming.
             Bidi-streaming не поддерживается.
-            Server-streaming возвращает JSON-массив ответов (макс 100 сообщений, можно увеличить через maxServerMessages).
-            Client-streaming возвращает один JSON-объект.
-            Unary возвращает один JSON-объект.
-            При ошибке возвращает isError=true с описанием.
-            """;
+             Server-streaming возвращает JSON-массив ответов (макс 100 сообщений, можно увеличить через maxServerMessages).
+             Client-streaming возвращает один JSON-объект.
+             Unary возвращает один JSON-объект.
+             При ошибке возвращает isError=true с описанием.
+             Если GRPC-ProtoFile — абсолютный путь (файл на машине клиента): сначала прочитай
+             этот файл и отправь его содержимое через load_proto_file, затем повтори вызов.
+             """;
 
     private static final String TIMESTAMP_HINT = """
             . Проверь формат полей через get_method_schema.
@@ -103,26 +106,14 @@ public class InvokeMethodTool implements McpTool {
             .alwaysPrintFieldsWithNoPresence()
             .preservingProtoFieldNames();
 
-    private final GrpcMethodRegistry registry;
-    private final GrpcChannelManager channelManager;
+    private final ConnectionProvider provider;
+    private final GrpcRetryTemplateFactory retryFactory;
     private final GrpcProperties properties;
-    private final RetryTemplate retryTemplate;
     private final McpJsonMapper mcpJsonMapper;
 
     private final Map<String, MethodDescriptor<DynamicMessage, DynamicMessage>> descriptorCache =
             new ConcurrentHashMap<>();
 
-
-
-    @EventListener
-    public void onChannelRecovered(ChannelRecoveredEvent event) {
-        clearDescriptorCache();
-    }
-
-    public void clearDescriptorCache() {
-        descriptorCache.clear();
-        log.debug("Descriptor cache cleared");
-    }
 
     @Override
     public McpServerFeatures.SyncToolSpecification build() {
@@ -132,14 +123,16 @@ public class InvokeMethodTool implements McpTool {
 
         return McpServerFeatures.SyncToolSpecification.builder()
                 .tool(tool)
-                .callHandler((exchange, request) -> invoke(request))
+                .callHandler((exchange, request) -> invoke(exchange, request))
                 .build();
     }
 
-    private McpSchema.CallToolResult invoke(McpSchema.CallToolRequest request) {
+    private McpSchema.CallToolResult invoke(McpSyncServerExchange exchange, McpSchema.CallToolRequest request) {
         try {
+            String sessionId = McpTool.sessionId(exchange);
+            GrpcConnection connection = requireInvocationConnection(exchange);
             String methodName = (String) request.arguments().get("method");
-            var meta = registry.getMethod(methodName);
+            var meta = provider.method(sessionId, connection, methodName);
 
             if (meta.clientStreaming() && meta.serverStreaming()) {
                 return ToolResults.error("Метод '" + methodName + "' является bidi-streaming и не поддерживается invoke_method.");
@@ -152,8 +145,9 @@ public class InvokeMethodTool implements McpTool {
                 return ToolResults.error("arguments не должен быть пустым");
             }
 
-            MethodDescriptor<DynamicMessage, DynamicMessage> md = getOrCreateDescriptor(meta);
+            MethodDescriptor<DynamicMessage, DynamicMessage> md = getOrCreateDescriptor(sessionId, connection, meta);
             Map<String, String> callMetadata = extractMetadata(request);
+            RetryTemplate retryTemplate = retryFactory.forChannel(connection.channelKey());
 
             int maxMessages = DEFAULT_MAX_SERVER_MESSAGES;
             Object rawMax = request.arguments().get("maxServerMessages");
@@ -162,9 +156,9 @@ public class InvokeMethodTool implements McpTool {
             }
 
             return switch (methodType(meta)) {
-                case CLIENT_STREAMING -> handleClientStreaming(md, requests, callMetadata);
-                case SERVER_STREAMING -> handleServerStreaming(md, requests.getFirst(), callMetadata, maxMessages);
-                default -> handleUnary(md, requests.getFirst(), callMetadata);
+                case CLIENT_STREAMING -> handleClientStreaming(md, requests, callMetadata, retryTemplate, connection);
+                case SERVER_STREAMING -> handleServerStreaming(md, requests.getFirst(), callMetadata, maxMessages, retryTemplate, connection);
+                default -> handleUnary(md, requests.getFirst(), callMetadata, retryTemplate, connection);
             };
         } catch (StatusRuntimeException e) {
             log.error("gRPC call failed after retries: {} {}", e.getStatus().getCode(), e.getMessage(), e);
@@ -179,6 +173,21 @@ public class InvokeMethodTool implements McpTool {
             log.error("Error invoking gRPC method: {}", e.getMessage(), e);
             return ToolResults.error("Ошибка вызова метода: " + e.getMessage());
         }
+    }
+
+    private GrpcConnection requireInvocationConnection(McpSyncServerExchange exchange) {
+        GrpcConnection connection = McpTool.connection(exchange);
+        if (connection == null) {
+            throw new IllegalArgumentException("Подключение не настроено");
+        }
+        if (!connection.hasTarget()) {
+            throw new IllegalArgumentException("""
+                    Адрес gRPC не указан: задайте GRPC-Host (+ GRPC-Port) или GRPC-Address
+                    в headers конфига MCP-клиента (opencode.json) либо GRPC_ADDRESS
+                    в окружении контейнера.
+                    """);
+        }
+        return connection;
     }
 
     private List<DynamicMessage> parseRequestMessages(@NonNull Object raw, Descriptors.Descriptor protoDesc) {
@@ -260,8 +269,8 @@ public class InvokeMethodTool implements McpTool {
         return Map.of();
     }
 
-    private Channel buildCallChannel(Map<String, String> metadata) {
-        Channel base = channelManager.getChannel();
+    private Channel buildCallChannel(GrpcConnection connection, Map<String, String> metadata) {
+        Channel base = provider.channel(connection);
         if (metadata == null || metadata.isEmpty()) {
             return base;
         }
@@ -288,8 +297,9 @@ public class InvokeMethodTool implements McpTool {
     }
 
     private MethodDescriptor<DynamicMessage, DynamicMessage> getOrCreateDescriptor(
-            io.grpc.mcp.grpc.discovery.MethodMeta meta) {
-        return descriptorCache.computeIfAbsent(meta.fullMethodName(), k ->
+            String sessionId, GrpcConnection connection, io.grpc.mcp.grpc.discovery.MethodMeta meta) {
+        String key = provider.discoveryKey(sessionId, connection) + "/" + meta.fullMethodName();
+        return descriptorCache.computeIfAbsent(key, k ->
                 MethodDescriptor.<DynamicMessage, DynamicMessage>newBuilder()
                         .setType(methodType(meta))
                         .setFullMethodName(meta.fullMethodName())
@@ -316,9 +326,11 @@ public class InvokeMethodTool implements McpTool {
     private McpSchema.CallToolResult handleClientStreaming(
             MethodDescriptor<DynamicMessage, DynamicMessage> md,
             List<DynamicMessage> requests,
-            Map<String, String> metadata) throws Exception {
+            Map<String, String> metadata,
+            RetryTemplate retryTemplate,
+            GrpcConnection connection) throws Exception {
 
-        Channel callChannel = buildCallChannel(metadata);
+        Channel callChannel = buildCallChannel(connection, metadata);
         CallOptions opts = buildCallOptions();
 
         DynamicMessage response = retryTemplate.execute(context -> {
@@ -343,9 +355,11 @@ public class InvokeMethodTool implements McpTool {
             MethodDescriptor<DynamicMessage, DynamicMessage> md,
             DynamicMessage request,
             Map<String, String> metadata,
-            int maxMessages) throws Exception {
+            int maxMessages,
+            RetryTemplate retryTemplate,
+            GrpcConnection connection) throws Exception {
 
-        Channel callChannel = buildCallChannel(metadata);
+        Channel callChannel = buildCallChannel(connection, metadata);
         CallOptions opts = buildCallOptions();
 
         List<DynamicMessage> responses = retryTemplate.execute(context -> {
@@ -367,14 +381,15 @@ public class InvokeMethodTool implements McpTool {
     private McpSchema.CallToolResult handleUnary(
             MethodDescriptor<DynamicMessage, DynamicMessage> md,
             DynamicMessage request,
-            Map<String, String> metadata) throws Exception {
+            Map<String, String> metadata,
+            RetryTemplate retryTemplate,
+            GrpcConnection connection) throws Exception {
 
-        Channel callChannel = buildCallChannel(metadata);
+        Channel callChannel = buildCallChannel(connection, metadata);
         CallOptions opts = buildCallOptions();
 
         DynamicMessage response = retryTemplate.execute(context ->
                 ClientCalls.blockingUnaryCall(callChannel, md, opts, request));
         return ToolResults.success(serializeMessage(response));
     }
-
 }

@@ -1,14 +1,15 @@
 package io.grpc.mcp.mcp.tool;
 
+import io.grpc.ConnectivityState;
 import io.modelcontextprotocol.json.McpJsonMapper;
 import io.modelcontextprotocol.server.McpServerFeatures;
+import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
+import io.grpc.mcp.connection.ConnectionProvider;
+import io.grpc.mcp.connection.GrpcConnection;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.actuate.health.Health;
 import org.springframework.stereotype.Component;
-import io.grpc.mcp.grpc.discovery.ServiceDiscoverer;
-import io.grpc.mcp.mcp.GrpcChannelHealthIndicator;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -18,8 +19,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class HealthCheckTool implements McpTool {
 
-    private final GrpcChannelHealthIndicator healthIndicator;
-    private final ServiceDiscoverer discovery;
+    private final ConnectionProvider provider;
     private final McpJsonMapper mcpJsonMapper;
 
     @Override
@@ -27,10 +27,11 @@ public class HealthCheckTool implements McpTool {
         McpSchema.Tool tool = McpSchema.Tool.builder("health",
                         Map.of("type", "object", "properties", Map.of()))
                 .description("""
-                        Проверить доступность gRPC сервера.
+                        Проверить доступность gRPC сервера текущего подключения
+                        (headers GRPC-Host/GRPC-Port в конфиге MCP-клиента).
                         Возвращает: channelState (READY/IDLE/CONNECTING/TRANSIENT_FAILURE/SHUTDOWN),
                         services (количество gRPC сервисов), methods (количество методов).
-                        Если сервер недоступен — автоматическое восстановление происходит в фоне.
+                        Если сервер недоступен — канал пересоздаётся автоматически при следующем вызове.
                         """)
                 .build();
 
@@ -38,8 +39,15 @@ public class HealthCheckTool implements McpTool {
                 .tool(tool)
                 .callHandler((exchange, request) -> {
                     try {
-                        Health health = healthIndicator.health();
-                        return textResult(toMap(health));
+                        GrpcConnection connection = requireConnection(exchange);
+                        ConnectivityState state = provider.channel(connection).getState(true);
+                        int methods = provider.methods(McpTool.sessionId(exchange), connection).size();
+                        Map<String, Object> result = new LinkedHashMap<>();
+                        result.put("target", connection.target());
+                        result.put("channelState", state.name());
+                        result.put("healthy", state == ConnectivityState.READY);
+                        result.put("methods", methods);
+                        return textResult(result);
                     } catch (Exception e) {
                         log.error("Health check failed: {}", e.getMessage(), e);
                         return ToolResults.error("Ошибка проверки соединения: " + e.getMessage());
@@ -48,12 +56,19 @@ public class HealthCheckTool implements McpTool {
                 .build();
     }
 
-    private Map<String, Object> toMap(Health health) {
-        Map<String, Object> result = new LinkedHashMap<>(health.getDetails());
-        result.put("healthy", health.getStatus().equals(org.springframework.boot.actuate.health.Status.UP));
-        result.put("services", discovery.getServices().size());
-        result.put("methods", discovery.getMethods().size());
-        return result;
+    private GrpcConnection requireConnection(McpSyncServerExchange exchange) {
+        GrpcConnection connection = McpTool.connection(exchange);
+        if (connection == null) {
+            throw new IllegalArgumentException("Подключение не настроено");
+        }
+        if (!connection.hasTarget()) {
+            throw new IllegalArgumentException("""
+                    Адрес gRPC не указан: задайте GRPC-Host (+ GRPC-Port) или GRPC-Address
+                    в headers конфига MCP-клиента (opencode.json) либо GRPC_ADDRESS
+                    в окружении контейнера.
+                    """);
+        }
+        return connection;
     }
 
     private McpSchema.CallToolResult textResult(Map<String, Object> payload) throws java.io.IOException {
@@ -61,5 +76,4 @@ public class HealthCheckTool implements McpTool {
                 .addTextContent(mcpJsonMapper.writeValueAsString(payload))
                 .build();
     }
-
 }

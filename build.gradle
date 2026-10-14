@@ -1,6 +1,7 @@
 plugins {
     id 'java'
     id 'application'
+    id 'jacoco'
     id 'org.springframework.boot' version '3.4.4'
     id 'io.spring.dependency-management' version '1.1.7'
     id 'com.google.protobuf' version '0.9.4'
@@ -27,6 +28,7 @@ repositories {
 ext {
     grpcVersion = '1.76.0'
     protobufVersion = '4.28.3'
+    commonProtosVersion = '2.59.2'
 }
 
 dependencies {
@@ -50,6 +52,7 @@ dependencies {
     implementation "io.grpc:grpc-stub:${grpcVersion}"
     implementation "io.grpc:grpc-api:${grpcVersion}"
     implementation "com.google.protobuf:protobuf-java:${protobufVersion}"
+    implementation "com.google.api.grpc:proto-google-common-protos:${commonProtosVersion}"
 
     // gRPC Server Reflection client
     implementation "io.grpc:grpc-services:${grpcVersion}"
@@ -58,6 +61,7 @@ dependencies {
     implementation "com.google.protobuf:protobuf-java-util:${protobufVersion}"
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation "io.grpc:grpc-inprocess:${grpcVersion}"
 }
 
 configurations.all {
@@ -79,4 +83,27 @@ bootBuildImage {
 
 test {
     useJUnitPlatform()
+    finalizedBy jacocoTestReport
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
+jacocoTestCoverageVerification {
+    dependsOn jacocoTestReport
+    violationRules {
+        rule {
+            element = 'BUNDLE'
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = 0.80
+            }
+        }
+    }
 }

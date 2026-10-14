@@ -1,6 +1,5 @@
 package io.grpc.mcp.config;
 
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import lombok.Data;
@@ -14,8 +13,7 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "grpc")
 public class GrpcProperties {
 
-    @NotBlank
-    private String address;
+    private String address = "";
 
     private String negotiationType;
 
@@ -28,9 +26,6 @@ public class GrpcProperties {
 
     @NotNull
     private Duration backoffInitial;
-
-    @NotNull
-    private Duration healthCheckInterval;
 
     @Positive
     private int maxRetries;
@@ -57,4 +52,15 @@ public class GrpcProperties {
 
     @NotNull
     private Duration reflectionTimeout;
+
+    private String protoBaseDir = "./protos";
+
+    private String wktDir = "./wkt";
+
+    private Duration connectionIdleTimeout = Duration.ofMinutes(30);
+
+    private Duration sessionProtoIdleTimeout = Duration.ofHours(1);
+
+    @Positive
+    private int maxUploadSize = 1048576;
 }

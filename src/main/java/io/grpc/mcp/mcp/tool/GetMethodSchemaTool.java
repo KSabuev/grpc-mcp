@@ -2,13 +2,14 @@ package io.grpc.mcp.mcp.tool;
 
 import io.modelcontextprotocol.json.McpJsonMapper;
 import io.modelcontextprotocol.server.McpServerFeatures;
+import io.modelcontextprotocol.server.McpSyncServerExchange;
 import io.modelcontextprotocol.spec.McpSchema;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import io.grpc.mcp.mcp.ExampleGenerator;
-import io.grpc.mcp.mcp.GrpcMethodRegistry;
 import io.grpc.mcp.mcp.ProtoSchemaConverter;
+import io.grpc.mcp.connection.ConnectionProvider;
 
 import java.util.List;
 import java.util.Map;
@@ -26,7 +27,7 @@ public class GetMethodSchemaTool implements McpTool {
             "required", List.of("method")
     );
 
-    private final GrpcMethodRegistry registry;
+    private final ConnectionProvider provider;
     private final ProtoSchemaConverter schemaConverter;
     private final ExampleGenerator exampleGenerator;
     private final McpJsonMapper mcpJsonMapper;
@@ -40,6 +41,8 @@ public class GetMethodSchemaTool implements McpTool {
                         inputSchema — JSON Schema входных аргументов (типы, required, описания полей).
                         outputSchema — JSON Schema ответа сервера.
                         example — шаблон аргументов для invoke_method (формат полей, подставьте свои значения).
+                        Если GRPC-ProtoFile — абсолютный путь (файл на машине клиента): сначала прочитай
+                        этот файл и отправь его содержимое через load_proto_file, затем повтори вызов.
                         """)
                 .build();
 
@@ -48,7 +51,8 @@ public class GetMethodSchemaTool implements McpTool {
                 .callHandler((exchange, request) -> {
                     try {
                         String methodName = (String) request.arguments().get("method");
-                        var meta = registry.getMethod(methodName);
+                        var meta = provider.method(McpTool.sessionId(exchange),
+                                ListMethodsTool.requireReflectionOrTarget(exchange), methodName);
 
                         Map<String, Object> inputSchema = schemaConverter.toJsonSchema(
                                 meta.inputDescriptor(),

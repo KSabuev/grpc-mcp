@@ -10,6 +10,6 @@ FROM eclipse-temurin:21-jre
 RUN apt-get update && apt-get install -y protobuf-compiler && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /build/build/libs/grpc-mcp-*.jar app.jar
-COPY src/main/resources/protos /protos
+ENV GRPC_WKT_DIR=/wkt
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]

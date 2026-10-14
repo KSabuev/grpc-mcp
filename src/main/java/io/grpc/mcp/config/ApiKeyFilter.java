@@ -1,18 +1,20 @@
 package io.grpc.mcp.config;
 
-import jakarta.servlet.*;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 
 @Component
 @Order(1)
 @Slf4j
-public class ApiKeyFilter implements Filter {
+public class ApiKeyFilter extends OncePerRequestFilter {
 
     private final String apiKey;
 
@@ -21,23 +23,13 @@ public class ApiKeyFilter implements Filter {
     }
 
     @Override
-    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
+    protected void doFilterInternal(HttpServletRequest req, HttpServletResponse res, FilterChain chain)
             throws IOException, ServletException {
 
-        if (!(request instanceof HttpServletRequest req) ||
-                !(response instanceof HttpServletResponse res)) {
-            chain.doFilter(request, response);
-            return;
-        }
         String path = req.getRequestURI();
 
-        if (apiKey.isEmpty() || path.startsWith("/actuator")) {
-            chain.doFilter(request, response);
-            return;
-        }
-
-        if (!path.startsWith("/mcp")) {
-            chain.doFilter(request, response);
+        if (apiKey.isEmpty() || path.startsWith("/actuator") || !path.startsWith("/mcp")) {
+            chain.doFilter(req, res);
             return;
         }
 
@@ -51,6 +43,6 @@ public class ApiKeyFilter implements Filter {
             return;
         }
 
-        chain.doFilter(request, response);
+        chain.doFilter(req, res);
     }
 }
