@@ -265,8 +265,6 @@ class ProtoSchemaConverterTest {
                 .contains("INT32");
     }
 
-    // === 2) Данные есть, ошибочные / граничные ===
-
     @Test
     void nestedMessageField() {
         // Arrange

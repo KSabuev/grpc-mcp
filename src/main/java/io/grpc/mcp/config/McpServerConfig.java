@@ -18,11 +18,13 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 import java.util.List;
 import java.util.Map;
 
 @Configuration
+@EnableScheduling
 @EnableConfigurationProperties({GrpcProperties.class, McpProperties.class})
 @Slf4j
 public class McpServerConfig {
@@ -66,7 +68,7 @@ public class McpServerConfig {
                                     List<McpServerFeatures.SyncToolSpecification> tools) {
         log.info("Registered {} MCP tools (per-client connections via GRPC-* headers)", tools.size());
         return McpServer.sync(transport)
-                .serverInfo(mcpProperties.getName(), "1.0.0")
+                .serverInfo(mcpProperties.getName(), "1.6.0")
                 .capabilities(McpSchema.ServerCapabilities.builder()
                         .tools(true)
                         .build())

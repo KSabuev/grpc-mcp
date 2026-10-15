@@ -59,7 +59,10 @@ public class GrpcProperties {
 
     private Duration connectionIdleTimeout = Duration.ofMinutes(30);
 
-    private Duration sessionProtoIdleTimeout = Duration.ofHours(1);
+    private Duration protoCacheIdleTimeout = Duration.ofDays(30);
+
+    @Positive
+    private int protoCacheMaxEntries = 64;
 
     @Positive
     private int maxUploadSize = 1048576;

@@ -242,8 +242,6 @@ class DescriptorUtilsTest {
                 .containsEntry("pkg.Msg2", "Second message");
     }
 
-    // === collectFieldAndEnumComments ===
-
     @Test
     void collectFieldAndEnumComments_withFieldComment_findsFieldComment() {
         // Arrange
@@ -308,8 +306,6 @@ class DescriptorUtilsTest {
                 .containsEntry("pkg.Msg.Status.OK", "OK comment")
                 .containsEntry("pkg.Msg.Status.ERROR", "ERROR comment");
     }
-
-    // === collectEnumValueComments (runtime Descriptor) ===
 
     @Test
     void collectEnumValueComments_enumField_collectsValues() throws Exception {

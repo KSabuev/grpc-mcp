@@ -115,12 +115,10 @@ class InvokeMethodToolTest {
                 .setName(name).setNumber(1).setType(type);
     }
 
-    // === 1) Корректные данные ===
-
     @Test
     void unarySuccess() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
+        when(provider.method(eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
         doReturn(outputMsg("ok")).when(retryTemplate).execute(any());
 
         // Act
@@ -136,7 +134,7 @@ class InvokeMethodToolTest {
     @Test
     void serverStreamingReturnsList() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/Stream"))).thenReturn(
+        when(provider.method(eq(connection), eq("test.TestService/Stream"))).thenReturn(
                 unaryMeta().methodName("Stream").fullMethodName("test.TestService/Stream")
                         .serverStreaming(true).build());
         doReturn(List.of(outputMsg("a"), outputMsg("b"))).when(retryTemplate).execute(any());
@@ -153,7 +151,7 @@ class InvokeMethodToolTest {
     @Test
     void clientStreamingWithArray() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/CS"))).thenReturn(
+        when(provider.method(eq(connection), eq("test.TestService/CS"))).thenReturn(
                 unaryMeta().methodName("CS").fullMethodName("test.TestService/CS")
                         .clientStreaming(true).build());
         doReturn(outputMsg("merged")).when(retryTemplate).execute(any());
@@ -170,7 +168,7 @@ class InvokeMethodToolTest {
     @Test
     void argumentsAsJsonString_parsedCorrectly() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
+        when(provider.method(eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
         doReturn(outputMsg("parsed")).when(retryTemplate).execute(any());
 
         // Act
@@ -184,7 +182,7 @@ class InvokeMethodToolTest {
     @Test
     void maxServerMessagesDoesNotAffectUnary() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
+        when(provider.method(eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
         doReturn(outputMsg("ok")).when(retryTemplate).execute(any());
 
         // Act
@@ -196,12 +194,10 @@ class InvokeMethodToolTest {
         assertThat(result.isError()).isFalse();
     }
 
-    // === 2) Данные есть, ошибка ===
-
     @Test
     void grpcError_returnsIsError() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
+        when(provider.method(eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
         doThrow(new StatusRuntimeException(Status.INVALID_ARGUMENT))
                 .when(retryTemplate).execute(any());
 
@@ -217,7 +213,7 @@ class InvokeMethodToolTest {
     @Test
     void bidiStreaming_returnsError() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/Bidi"))).thenReturn(
+        when(provider.method(eq(connection), eq("test.TestService/Bidi"))).thenReturn(
                 unaryMeta().methodName("Bidi").fullMethodName("test.TestService/Bidi")
                         .serverStreaming(true).clientStreaming(true).build());
 
@@ -233,7 +229,7 @@ class InvokeMethodToolTest {
     @Test
     void invalidJsonString_returnsError() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
+        when(provider.method(eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
 
         // Act
         var result = call(Map.of("method", "test.TestService/DoIt",
@@ -243,12 +239,10 @@ class InvokeMethodToolTest {
         assertThat(result.isError()).isTrue();
     }
 
-    // === 3) Данные отсутствуют ===
-
     @Test
     void methodNotFound_returnsError() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/DoIt")))
+        when(provider.method(eq(connection), eq("test.TestService/DoIt")))
                 .thenThrow(new IllegalArgumentException(
                         "Метод \"test.TestService/DoIt\" не найден."));
 
@@ -264,7 +258,7 @@ class InvokeMethodToolTest {
     @Test
     void emptyArgumentsList_returnsError() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
+        when(provider.method(eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
 
         // Act
         var result = call(Map.of("method", "test.TestService/DoIt",
@@ -278,7 +272,7 @@ class InvokeMethodToolTest {
     @Test
     void zeroServerMessages_returnsEmptyList() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/Stream"))).thenReturn(
+        when(provider.method(eq(connection), eq("test.TestService/Stream"))).thenReturn(
                 unaryMeta().methodName("Stream").fullMethodName("test.TestService/Stream")
                         .serverStreaming(true).build());
         doReturn(List.of()).when(retryTemplate).execute(any());
@@ -295,7 +289,7 @@ class InvokeMethodToolTest {
     @Test
     void grpcInvalidProtocolBuffer_returnsError() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
+        when(provider.method(eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
         doThrow(new InvalidProtocolBufferException("test"))
                 .when(retryTemplate).execute(any());
 
@@ -311,7 +305,7 @@ class InvokeMethodToolTest {
     @Test
     void extractMetadata_allNullValues_filtersOutToEmpty() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
+        when(provider.method(eq(connection), eq("test.TestService/DoIt"))).thenReturn(unaryMeta().build());
         doReturn(outputMsg("ok")).when(retryTemplate).execute(any());
 
         var metadata = new java.util.HashMap<String, Object>();
@@ -330,7 +324,7 @@ class InvokeMethodToolTest {
     @Test
     void maxServerMessages_isZero_usesDefault() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("test.TestService/Stream"))).thenReturn(
+        when(provider.method(eq(connection), eq("test.TestService/Stream"))).thenReturn(
                 unaryMeta().methodName("Stream").fullMethodName("test.TestService/Stream")
                         .serverStreaming(true).build());
         doReturn(List.of(outputMsg("a"))).when(retryTemplate).execute(any());

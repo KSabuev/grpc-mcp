@@ -15,12 +15,4 @@ public interface McpTool {
         Object value = exchange.transportContext().get(GrpcConnection.CONTEXT_KEY);
         return value instanceof GrpcConnection connection ? connection : null;
     }
-
-    /**
-     * Current MCP session id (key for in-memory session-scoped state).
-     */
-    static String sessionId(McpSyncServerExchange exchange) {
-        String sid = exchange.sessionId();
-        return (sid != null && !sid.isBlank()) ? sid : "default";
-    }
 }

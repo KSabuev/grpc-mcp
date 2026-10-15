@@ -80,8 +80,6 @@ class MetadataInterceptorTest {
         verify(delegateCall).cancel("test", null);
     }
 
-    // === 2) Данные есть, ошибочные ===
-
     @Test
     void mergesBinaryMetadata() {
         // Arrange

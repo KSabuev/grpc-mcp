@@ -32,9 +32,11 @@ public class ListMethodsTool implements McpTool {
                         Включает unary и streaming методы.
                         Каждое имя можно передать в get_method_schema и invoke_method.
                         Пример элемента: "com.example.MyService/myMethod".
-                        Используйте полное имя как есть, не обрезайте пакетный префикс.
-                        Если GRPC-ProtoFile — абсолютный путь (файл на машине клиента): прочитай этот файл
-                        и отправь его содержимое через load_proto_file, затем повтори list_methods.
+                        Используй полное имя как есть, не обрезай пакетный префикс.
+                        Если GRPC-ProtoFile — путь на машине клиента: при первом использовании
+                        прочитай этот файл и отправь его содержимое через load_proto_file
+                        (файл закэшируется на сервере по host:port + имя файла), затем повтори
+                        list_methods; в следующих сессиях методы выдаются сразу из кэша.
                         """)
                 .build();
 
@@ -42,8 +44,7 @@ public class ListMethodsTool implements McpTool {
                 .tool(tool)
                 .callHandler((exchange, request) -> {
                     try {
-                        List<String> names = provider.methods(McpTool.sessionId(exchange),
-                                        requireReflectionOrTarget(exchange)).stream()
+                        List<String> names = provider.methods(requireReflectionOrTarget(exchange)).stream()
                                 .map(meta -> meta.fullMethodName())
                                 .toList();
                         String json = mcpJsonMapper.writeValueAsString(names);
@@ -64,14 +65,10 @@ public class ListMethodsTool implements McpTool {
     static GrpcConnection requireReflectionOrTarget(McpSyncServerExchange exchange) {
         GrpcConnection connection = McpTool.connection(exchange);
         if (connection == null) {
-            throw new IllegalArgumentException("Подключение не настроено");
+            throw new IllegalArgumentException(GrpcConnection.NOT_CONFIGURED_MESSAGE);
         }
         if (!connection.hasTarget() && connection.usesReflection()) {
-            throw new IllegalArgumentException("""
-                    GRPC_ADDRESS не задан (адрес gRPC по умолчанию не настроен).
-                    Задайте GRPC-Host (+ GRPC-Port) в headers конфига MCP-клиента (opencode.json)
-                    либо GRPC_ADDRESS в окружении контейнера.
-                    """);
+            throw new IllegalArgumentException(GrpcConnection.NO_TARGET_MESSAGE);
         }
         return connection;
     }

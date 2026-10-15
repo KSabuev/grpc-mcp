@@ -138,8 +138,6 @@ class GrpcRetryPolicyTest {
         assertThat(policy.canRetry(context(Status.Code.CANCELLED, 1))).isFalse();
     }
 
-    // === 2/3) Остальные коды (не входят в разрешённые) ===
-
     @Test
     void canRetry_internal() {
         // Arrange

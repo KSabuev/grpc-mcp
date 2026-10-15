@@ -25,7 +25,7 @@ class DescriptorFileServiceDiscovererTest {
 
         // Assert
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Unsupported file type");
+                .hasMessageContaining("Неподдерживаемый тип файла");
     }
 
     @Test
@@ -39,7 +39,7 @@ class DescriptorFileServiceDiscovererTest {
 
         // Assert
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Descriptor file not found");
+                .hasMessageContaining("Файл дескриптора не найден");
     }
 
     @Test
@@ -84,7 +84,7 @@ class DescriptorFileServiceDiscovererTest {
 
         // Assert
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Proto file not found");
+                .hasMessageContaining("Proto-файл не найден");
     }
 
     @Test
@@ -113,7 +113,7 @@ class DescriptorFileServiceDiscovererTest {
 
         // Assert
         assertThat(thrown).isInstanceOf(RuntimeException.class)
-                .hasMessageContaining("Descriptor set is empty");
+                .hasMessageContaining("Дескрипторный набор пуст");
     }
 
     @Test

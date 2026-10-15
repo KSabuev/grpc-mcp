@@ -1,69 +1,93 @@
 package io.grpc.mcp.connection;
 
+import com.github.benmanes.caffeine.cache.Cache;
 import io.grpc.ManagedChannel;
 import io.grpc.mcp.config.GrpcProperties;
 import io.grpc.mcp.grpc.channel.GrpcChannelFactory;
+import io.grpc.mcp.grpc.compilation.ProtoCompilationService;
 import io.grpc.mcp.grpc.discovery.DescriptorFileServiceDiscoverer;
 import io.grpc.mcp.grpc.discovery.GrpcReflectionService;
 import io.grpc.mcp.grpc.discovery.MethodMeta;
+import io.grpc.mcp.grpc.discovery.ProtocCompilationException;
 import io.grpc.mcp.grpc.discovery.ServiceDiscoverer;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Comparator;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 /**
  * Per-client gRPC connections: lazy channel cache, lazy discovery cache,
- * in-memory session proto store (RAM only, nothing persisted to disk),
- * proto file reference resolution and idle eviction.
+ * server-side proto cache for client paths (RAM only, keyed by
+ * host:port + proto file name, shared across MCP sessions, nothing persisted
+ * to disk), proto file reference resolution and idle eviction.
  */
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class ConnectionProvider {
 
     private final GrpcChannelFactory channelFactory;
     private final GrpcProperties properties;
+    private final ProtoCompilationService compilationService;
+    private final Cache<Object, Object> protoCache;
 
     private final ConcurrentHashMap<String, ChannelEntry> channels = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, DiscoveryEntry> discoveries = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, SessionProtoEntry> sessionProtos = new ConcurrentHashMap<>();
-    private ScheduledExecutorService sweeper;
+
+    public ConnectionProvider(GrpcChannelFactory channelFactory, GrpcProperties properties,
+                              ProtoCompilationService compilationService,
+                              Cache<Object, Object> protoCacheNative) {
+        this.channelFactory = channelFactory;
+        this.properties = properties;
+        this.compilationService = compilationService;
+        this.protoCache = protoCacheNative;
+    }
 
     private record ChannelEntry(ManagedChannel channel, Instant lastAccess) {}
 
     private record DiscoveryEntry(List<MethodMeta> methods, Map<String, MethodMeta> byName) {}
 
-    /** Compiled proto kept in RAM for the lifetime of one MCP session. */
-    private static final class SessionProtoEntry {
-        final List<MethodMeta> methods;
-        final Map<String, MethodMeta> byName;
-        volatile Instant lastAccess;
+    /** Result of a proto load: method count of the loaded file and whether it was served from cache. */
+    public record ProtoLoadResult(int methodCount, boolean cached) {}
 
-        SessionProtoEntry(List<MethodMeta> methods, Map<String, MethodMeta> byName) {
-            this.methods = List.copyOf(methods);
-            this.byName = Map.copyOf(byName);
-            this.lastAccess = Instant.now();
-        }
+    /** One uploaded file inside a cached proto entry (all mutations happen under the entry monitor). */
+    private static final class CachedFile {
+        final String content;
+        final String sha256;
+        final int methodCount;
+        final Set<String> methodNames;
 
-        void touch() {
-            lastAccess = Instant.now();
+        CachedFile(String content, String sha256, int methodCount, Set<String> methodNames) {
+            this.content = content;
+            this.sha256 = sha256;
+            this.methodCount = methodCount;
+            this.methodNames = Set.copyOf(methodNames);
         }
+    }
+
+    /**
+     * Server-side proto cache entry for one connection key (host:port + proto file name).
+     * Lives in RAM across MCP sessions until idle eviction, LRU eviction or shutdown.
+     * All mutations of files/methods/byName happen under the entry monitor.
+     */
+    private static final class CachedProtoEntry {
+        final Map<String, CachedFile> files = new LinkedHashMap<>();
+        final List<MethodMeta> methods = new ArrayList<>();
+        final Map<String, MethodMeta> byName = new LinkedHashMap<>();
     }
 
     @PostConstruct
@@ -74,30 +98,23 @@ public class ConnectionProvider {
         } catch (IOException e) {
             throw new IllegalStateException("Failed to create proto base or WKT directory", e);
         }
-        sweeper = Executors.newSingleThreadScheduledExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "grpc-mcp-sweeper");
-            thread.setDaemon(true);
-            return thread;
-        });
-        sweeper.scheduleWithFixedDelay(this::sweep, 5, 5, TimeUnit.MINUTES);
     }
 
     @PreDestroy
     public void shutdown() {
-        if (sweeper != null) {
-            sweeper.shutdownNow();
-        }
         channels.forEach((key, entry) -> {
             entry.channel().shutdownNow();
             log.info("Shut down gRPC channel for {}", key);
         });
         channels.clear();
         discoveries.clear();
-        sessionProtos.forEach((sessionId, entry) -> {
-            deleteSessionTempDir(sessionId);
-            log.info("Cleared in-memory proto for session {}", sessionId);
-        });
-        sessionProtos.clear();
+        protoCache.asMap().keySet().forEach(key -> log.info("Cleared cached proto for {}", key));
+        protoCache.invalidateAll();
+    }
+
+    /** Forces Caffeine maintenance: applies pending expirations/evictions (used by tests). */
+    void maintainProtoCache() {
+        protoCache.cleanUp();
     }
 
     public ManagedChannel channel(GrpcConnection connection) {
@@ -109,71 +126,109 @@ public class ConnectionProvider {
         return entry.channel();
     }
 
-    public List<MethodMeta> methods(String sessionId, GrpcConnection connection) {
-        return discovery(sessionId, connection).methods();
+    public List<MethodMeta> methods(GrpcConnection connection) {
+        return discovery(connection).methods();
     }
 
-    public MethodMeta method(String sessionId, GrpcConnection connection, String fullMethodName) {
-        MethodMeta meta = discovery(sessionId, connection).byName().get(fullMethodName);
+    public MethodMeta method(GrpcConnection connection, String fullMethodName) {
+        MethodMeta meta = discovery(connection).byName().get(fullMethodName);
         if (meta == null) {
             throw new IllegalArgumentException("""
                     Метод "%s" не найден.
-                    Используйте list_methods, чтобы получить точное полное имя.
+                    Используй list_methods, чтобы получить точное полное имя.
                     Пример формата: "com.example.MyService/myMethod".""".formatted(fullMethodName));
         }
         return meta;
     }
 
-    public String discoveryKey(String sessionId, GrpcConnection connection) {
+    public String discoveryKey(GrpcConnection connection) {
         if (connection.usesReflection()) {
             return "reflection:" + connection.target();
         }
         if (connection.isClientPath()) {
-            return "session:" + sessionId;
+            return "cache:" + connection.protoCacheKey();
         }
         return "file:" + resolveProtoPath(connection.protoRef());
     }
 
     /**
-     * Compiles a client-supplied .proto file and keeps the resulting methods in RAM,
-     * scoped to one MCP session. Nothing is written to persistent storage: the temp
-     * file needed by protoc lives in a per-session tmp dir and is removed when the
-     * session entry is evicted or the app shuts down.
+     * Compiles a client-supplied .proto file (in a transient scratch, via
+     * ProtoCompilationService) and commits the result into the server-side proto
+     * cache (RAM only), keyed by host:port + proto file name, shared across MCP
+     * sessions. The cache entry is committed only on successful compilation; on
+     * failure a freshly created empty entry is rolled back. If the exact same
+     * content for the same file name is already cached, the entry is served from
+     * cache without running protoc.
      *
-     * @return number of discovered methods
+     * @return method count of the loaded file and whether it was served from cache
+     * @throws ProtocCompilationException when protoc rejects the file (syntax error, unresolved import)
      */
-    public int loadProtoIntoSession(String sessionId, String content, String name) {
-        Path dir = sessionTempDir(sessionId);
+    public ProtoLoadResult loadProto(GrpcConnection connection, String content, String name) {
+        if (!connection.isClientPath()) {
+            throw new IllegalArgumentException("loadProto is only defined for client paths");
+        }
+        String key = connection.protoCacheKey();
+        String fileName = sanitizeFileName(name);
+        CachedProtoEntry entry = (CachedProtoEntry) protoCache.get(key, k -> new CachedProtoEntry());
         try {
-            Files.createDirectories(dir);
-            Path file = dir.resolve(sanitizeFileName(name));
-            Files.writeString(file, content);
+            synchronized (entry) {
+                String hash = sha256Hex(content);
+                CachedFile existing = entry.files.get(fileName);
+                if (existing != null && existing.sha256.equals(hash)) {
+                    log.info("Proto cache hit for {} (file '{}')", key, fileName);
+                    return new ProtoLoadResult(existing.methodCount, true);
+                }
+                List<MethodMeta> newMethods = compilationService.compile(importedFiles(entry), fileName, content);
+                Set<String> newNames = newMethods.stream()
+                        .map(MethodMeta::fullMethodName)
+                        .collect(Collectors.toSet());
 
-            ServiceDiscoverer discoverer =
-                    new DescriptorFileServiceDiscoverer(file.toString(), properties.getProtocTimeout(), wktDirPath());
-            discoverer.discover();
-            if (discoverer.getMethods().isEmpty()) {
-                log.info("Proto '{}' contains no gRPC methods; keeping it as an import dependency in session {}",
-                        name, sessionId);
-                return 0;
+                if (existing != null) {
+                    entry.byName.keySet().removeAll(existing.methodNames);
+                    entry.methods.removeIf(meta -> existing.methodNames.contains(meta.fullMethodName()));
+                }
+                for (MethodMeta meta : newMethods) {
+                    entry.byName.put(meta.fullMethodName(), meta);
+                    entry.methods.add(meta);
+                }
+                entry.files.put(fileName, new CachedFile(content, hash, newMethods.size(), newNames));
+                log.info("Loaded {} methods from proto '{}' into cache {}", newMethods.size(), fileName, key);
+                return new ProtoLoadResult(newMethods.size(), false);
             }
-            Map<String, MethodMeta> byName = new LinkedHashMap<>();
-            discoverer.getMethods().forEach(meta -> byName.put(meta.fullMethodName(), meta));
-            sessionProtos.put(sessionId, new SessionProtoEntry(discoverer.getMethods(), byName));
-            log.info("Loaded {} methods from in-memory proto '{}' for session {}",
-                    byName.size(), name, sessionId);
-            return byName.size();
-        } catch (IOException e) {
-            throw new IllegalStateException("Failed to load proto file into session memory", e);
+        } catch (RuntimeException e) {
+            rollbackFreshEntry(key, entry);
+            throw e;
         }
     }
 
-    public boolean hasSessionProto(String sessionId) {
-        return sessionProtos.containsKey(sessionId);
+    private Map<String, String> importedFiles(CachedProtoEntry entry) {
+        Map<String, String> imported = new LinkedHashMap<>();
+        entry.files.forEach((storedName, stored) -> imported.put(storedName, stored.content));
+        return imported;
     }
 
-    public int sessionProtoCount() {
-        return sessionProtos.size();
+    /**
+     * Removes a cache entry left behind by a failed load when it holds no files
+     * and no methods, so a broken first upload does not pollute the cache.
+     */
+    private void rollbackFreshEntry(String key, CachedProtoEntry entry) {
+        synchronized (entry) {
+            if (entry.files.isEmpty() && entry.methods.isEmpty()) {
+                protoCache.invalidate(key);
+                log.info("Removed empty cache entry for {} after failed proto load", key);
+            }
+        }
+    }
+
+    public boolean hasCachedProto(GrpcConnection connection) {
+        if (!connection.isClientPath()) {
+            return false;
+        }
+        return protoCache.getIfPresent(connection.protoCacheKey()) != null;
+    }
+
+    public int protoCacheCount() {
+        return (int) protoCache.estimatedSize();
     }
 
     public void evictChannel(String channelKey) {
@@ -208,26 +263,26 @@ public class ConnectionProvider {
     /**
      * Resolves a proto reference (file on the server) to an absolute path,
      * guarding against path traversal. Client paths (/, ~) never reach this method —
-     * they are routed to the in-memory session proto store.
+     * they are routed to the server-side proto cache.
      */
     public Path resolveProtoPath(String protoRef) {
         if (protoRef == null || protoRef.isBlank()) {
-            throw new IllegalArgumentException("Proto file reference is empty");
+            throw new IllegalArgumentException("Ссылка на proto-файл не задана.");
         }
         if (protoRef.startsWith(GrpcConnection.LEGACY_UPLOAD_PREFIX)) {
             throw new IllegalArgumentException("""
                     Референсы вида "upload/<uuid>.proto" больше не поддерживаются: proto-файлы
-                    теперь загружаются в память сессии тулзой load_proto_file.
-                    Загрузите файл через load_proto_file и повторите вызов.
+                    теперь загружаются в кэш сервера тулзой load_proto_file.
+                    Загрузи файл через load_proto_file и повтори вызов.
                     """);
         }
         Path base = protoBaseDir();
         if (Path.of(protoRef).isAbsolute()) {
-            throw new IllegalArgumentException("Absolute proto file paths are not allowed: " + protoRef);
+            throw new IllegalArgumentException("Абсолютные пути к proto-файлам не разрешены: " + protoRef);
         }
         Path resolved = base.resolve(protoRef).normalize();
         if (!resolved.startsWith(base)) {
-            throw new IllegalArgumentException("Proto file path escapes the allowed base directory: " + protoRef);
+            throw new IllegalArgumentException("Путь к proto-файлу выходит за пределы базовой директории: " + protoRef);
         }
         if (!Files.isRegularFile(resolved)) {
             throw new IllegalArgumentException(
@@ -236,16 +291,20 @@ public class ConnectionProvider {
         return resolved;
     }
 
-    private DiscoveryEntry discovery(String sessionId, GrpcConnection connection) {
+    private DiscoveryEntry discovery(GrpcConnection connection) {
         if (connection.isClientPath()) {
-            SessionProtoEntry entry = sessionProtos.get(sessionId);
+            CachedProtoEntry entry = (CachedProtoEntry) protoCache.getIfPresent(connection.protoCacheKey());
             if (entry == null) {
                 throw new IllegalArgumentException(GrpcConnection.clientPathRequest(connection.protoRef()));
             }
-            entry.touch();
-            return new DiscoveryEntry(entry.methods, entry.byName);
+            synchronized (entry) {
+                if (entry.byName.isEmpty()) {
+                    throw new IllegalArgumentException(GrpcConnection.clientPathRequest(connection.protoRef()));
+                }
+                return new DiscoveryEntry(List.copyOf(entry.methods), Map.copyOf(entry.byName));
+            }
         }
-        String key = discoveryKey(sessionId, connection);
+        String key = discoveryKey(connection);
         return discoveries.computeIfAbsent(key, k -> {
             ServiceDiscoverer discoverer = createDiscoverer(connection);
             discoverer.discover();
@@ -271,30 +330,27 @@ public class ConnectionProvider {
         if (connection.usesReflection()) {
             return """
                     Методы не обнаружены на %s: gRPC reflection не отвечает.
-                    Проверьте адрес/порт в headers (GRPC-Host, GRPC-Port, GRPC-Negotiation)
-                    и что на целевом сервере включён server reflection, либо задайте
+                    Проверь адрес/порт в headers (GRPC-Host, GRPC-Port, GRPC-Negotiation)
+                    и что на целевом сервере включён server reflection, либо задай
                     GRPC-ProtoFile (имя файла на сервере либо путь к файлу на машине клиента —
-                    тогда прочитайте его и отправьте содержимое через load_proto_file).
+                    тогда прочитай его и отправь содержимое через load_proto_file).
                     """
                     .formatted(connection.target());
         }
         if (discoverer instanceof DescriptorFileServiceDiscoverer) {
-            return "Не удалось обнаружить методы из proto-файла " + connection.protoRef();
+            return "Не удалось обнаружить методы из proto-файла " + connection.protoRef() + ".";
         }
-        return "Не удалось обнаружить методы для " + connection.target();
+        return "Не удалось обнаружить методы для " + connection.target() + ".";
     }
 
     private void requireTarget(GrpcConnection connection) {
         if (!connection.hasTarget()) {
-            throw new IllegalArgumentException("""
-                    GRPC_ADDRESS не задан (адрес gRPC по умолчанию не настроен).
-                    Задайте GRPC-Host (+ GRPC-Port) в headers конфига MCP-клиента (opencode.json)
-                    либо GRPC_ADDRESS в окружении контейнера.
-                    """);
+            throw new IllegalArgumentException(GrpcConnection.NO_TARGET_MESSAGE);
         }
     }
 
-    void sweep() {
+    @Scheduled(fixedDelayString = "${grpc.sweep-interval:5m}")
+    public void sweep() {
         try {
             Duration idleTimeout = properties.getConnectionIdleTimeout();
             Instant cutoff = idleTimeout != null ? Instant.now().minus(idleTimeout) : null;
@@ -308,57 +364,23 @@ public class ConnectionProvider {
                     return false;
                 });
             }
-            evictIdleSessionProtos();
         } catch (Exception e) {
             log.warn("Connection sweep failed: {}", e.getMessage(), e);
         }
     }
 
-    private void evictIdleSessionProtos() {
-        Duration timeout = properties.getSessionProtoIdleTimeout();
-        if (timeout == null) {
-            return;
-        }
-        Instant cutoff = Instant.now().minus(timeout);
-        sessionProtos.entrySet().removeIf(entry -> {
-            if (entry.getValue().lastAccess.isBefore(cutoff)) {
-                deleteSessionTempDir(entry.getKey());
-                log.info("Evicted in-memory proto for idle session {} (idle > {})", entry.getKey(), timeout);
-                return true;
+    private static String sha256Hex(String content) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(content.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(64);
+            for (byte b : digest) {
+                hex.append(String.format("%02x", b));
             }
-            return false;
-        });
-    }
-
-    /**
-     * Per-session scratch dir (tmp) for the temp proto file that protoc needs.
-     * Lives exactly as long as the session entry; removed on eviction/shutdown.
-     */
-    Path sessionTempDir(String sessionId) {
-        return Path.of(System.getProperty("java.io.tmpdir"), "grpc-mcp", sanitizeSessionId(sessionId));
-    }
-
-    private void deleteSessionTempDir(String sessionId) {
-        Path dir = sessionTempDir(sessionId);
-        if (!Files.isDirectory(dir)) {
-            return;
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("Алгоритм SHA-256 недоступен", e);
         }
-        try (var files = Files.walk(dir)) {
-            files.sorted(Comparator.reverseOrder()).forEach(path -> {
-                try {
-                    Files.deleteIfExists(path);
-                } catch (IOException e) {
-                    log.warn("Failed to delete session temp file {}: {}", path, e.getMessage());
-                }
-            });
-        } catch (IOException e) {
-            log.warn("Failed to clean session temp dir {}: {}", dir, e.getMessage());
-        }
-    }
-
-    private static String sanitizeSessionId(String sessionId) {
-        String sanitized = sessionId.replaceAll("[^a-zA-Z0-9\\-_]", "_");
-        return sanitized.isBlank() ? "default" : sanitized;
     }
 
     private static String sanitizeFileName(String name) {

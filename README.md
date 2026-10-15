@@ -3,6 +3,8 @@
 # grpc-mcp — Universal MCP Bridge for Any gRPC Service
 
 <p>
+  <img src="https://img.shields.io/badge/version-1.6.0-4E79A7?style=for-the-badge">
+  <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge">
   <img src="https://img.shields.io/badge/Java-21-007396?style=for-the-badge&logo=openjdk&logoColor=white">
   <img src="https://img.shields.io/badge/Spring_Boot-3.4-6DB33F?style=for-the-badge&logo=springboot&logoColor=white">
   <img src="https://img.shields.io/badge/Gradle-8.x-02303A?style=for-the-badge&logo=gradle&logoColor=white">
@@ -15,15 +17,36 @@
 
 ---
 
+## Table of Contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Quick Start](#quick-start)
+- [MCP Tools](#mcp-tools)
+- [Personal Connections (per-client)](#personal-connections-per-client)
+- [Discovery Modes](#discovery-modes)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Development](#development)
+- [Docker](#docker)
+- [Security](#security)
+- [License](#license)
+
 ## Features
 
 - **5 MCP tools** — `list_methods`, `get_method_schema`, `invoke_method`, `load_proto_file`, `health`
 - **Personal connections** — each MCP client (opencode/Claude, …) connects to its own gRPC target via config headers, like `postgres-mcp`
 - **2 discovery modes** — gRPC reflection or protoc-compiled `.proto` files (per connection, lazy)
-- **In-memory proto loading** — pass a `.proto` file through the `load_proto_file` tool; it is compiled and kept in RAM for the MCP session only — nothing is written to the server disk
+- **In-memory proto cache** — pass a `.proto` file through the `load_proto_file` tool; it is compiled and cached in RAM per `host:port` + file name, shared across MCP sessions — nothing is written to the server disk
 - **Resilience** — per-channel idle eviction, auto-rebuild on `UNAVAILABLE`, exponential-backoff retry
 - **Security** — X-Api-Key authentication, TLS gRPC, custom metadata headers
 - **Config-driven** — all settings via environment variables, single universal Docker image
+
+## Requirements
+
+- **Docker** — to run the image (Quick Start)
+- **JDK 21 + Gradle** (the wrapper is included in the repo) — to build from source
+- **protoc** — bundled in the Docker image; not required on the client machine
 
 ## Quick Start
 
@@ -32,12 +55,12 @@ docker run -p 8080:8080 \
   -e GRPC_ADDRESS=your-grpc-host:port \
   -e MCP_NAME="My Service" \
   -e MCP_API_KEY=your-api-key \
-  grpc-mcp:1.0
+  grpc-mcp:1.6
 ```
 
-`MCP_API_KEY` is optional: without it (or empty) the server works without a key.
+`MCP_API_KEY` is optional — see [Security](#security).
 
-Then connect any MCP client:
+Then connect any MCP client — standard `mcpServers` config (Claude Desktop, …):
 
 ```json
 {
@@ -60,7 +83,7 @@ Then connect any MCP client:
 | `list_methods` | Lists all discovered gRPC methods of the current connection as `ServiceName/methodName` |
 | `get_method_schema` | JSON Schema of input arguments + example. Param: `method` |
 | `invoke_method` | Call a gRPC method. Params: `method`, `arguments` (JSON), optional `metadata` (per-call headers) |
-| `load_proto_file` | Loads a `.proto` file (content as a string argument) into session memory, compiles it and returns the method count. No config changes needed |
+| `load_proto_file` | Loads a `.proto` file (content as a string argument) into the server-side RAM cache, compiles it and returns the method count + `cached` flag. No config changes needed |
 | `health` | Current connection: channel state, method count |
 
 ## Personal Connections (per-client)
@@ -70,43 +93,43 @@ Connection parameters are resolved **per HTTP request** with priority: **client 
 
 ### Client headers (opencode.json)
 
-| Header | Description |
-|---|---|
-| `GRPC-Host` + `GRPC-Port` | gRPC target (port default `50051`) |
-| `GRPC-Address` | Alternative: full `host:port` in one header |
-| `GRPC-Negotiation` | `PLAINTEXT` or `TLS` |
-| `GRPC-Metadata` | JSON string of static gRPC headers, e.g. `{"x-tenant":"acme"}` |
-| `GRPC-ProtoFile` | Proto source: a file name in the proto base dir (file on the server) or an absolute/`~` path — a file on the client machine, loaded into session memory via `load_proto_file` |
+| Header | Description                                                                                                                                                                                |
+|---|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `GRPC-Host` + `GRPC-Port` | gRPC target (port default `1234`)                                                                                                                                                          |
+| `GRPC-Address` | Alternative: full `host:port` in one header                                                                                                                                                |
+| `GRPC-Negotiation` | `PLAINTEXT` or `TLS`                                                                                                                                                                       |
+| `GRPC-Metadata` | JSON string of static gRPC headers, e.g. `{"x-tenant":"acme"}`                                                                                                                             |
+| `GRPC-ProtoFile` | Proto source: a file name in the proto base dir (file on the server) or an absolute/`~` path — a file on the client machine, loaded into the server-side proto cache via `load_proto_file` |
 
 Non-ASCII header values (e.g. Cyrillic paths like `/home/me/Загрузки/svc.proto`) are supported:
 the server re-decodes the UTF-8 bytes that HTTP clients put on the wire.
 
-### Example
+### Example (opencode.json)
 
 ```json
 {
   "mcp": {
     "grpc-service-a": {
       "type": "remote",
-      "url": "http://172.28.34.101:8080/mcp",
+      "url": "http://localhost:8080/mcp",
       "enabled": true,
       "oauth": false,
       "headers": {
         "X-API-Key": "<api-key>",
-        "GRPC-Host": "10.0.0.5",
-        "GRPC-Port": "50051",
+        "GRPC-Host": "0.0.0.1",
+        "GRPC-Port": "1234",
         "GRPC-Negotiation": "TLS",
         "GRPC-Metadata": "{\"x-tenant\":\"acme\"}"
       }
     },
     "grpc-service-b": {
       "type": "remote",
-      "url": "http://172.28.34.101:8080/mcp",
+      "url": "http://localhost:8080/mcp",
       "enabled": true,
       "oauth": false,
       "headers": {
         "X-API-Key": "<api-key>",
-        "GRPC-Host": "10.0.0.7",
+        "GRPC-Host": "0.0.0.2",
         "GRPC-ProtoFile": "/home/me/protos/svc.proto"
       }
     }
@@ -117,7 +140,7 @@ the server re-decodes the UTF-8 bytes that HTTP clients put on the wire.
 Without `GRPC-*` headers the client falls back to the container env
 (`GRPC_ADDRESS`, …) — the classic single-target deployment keeps working.
 
-### Proto file on the client machine (in-memory, session-scoped)
+### Proto file on the client machine (in-memory, cached per connection)
 
 If the target gRPC server has no reflection and the proto file lives on the client machine
 (point `GRPC-ProtoFile` at it — e.g. `/home/me/protos/svc.proto`):
@@ -126,7 +149,12 @@ If the target gRPC server has no reflection and the proto file lives on the clie
    client machine and send its content via `load_proto_file` (if the file is missing at
    that path, report “file not found at the configured path”).
 2. `load_proto_file(content="<file text>", name="svc.proto")` compiles the proto and keeps
-   the methods **in RAM for the current MCP session** — nothing is written to disk.
+   the methods **in the server-side RAM cache** — nothing is written to disk.
+   - The cache is keyed by `host:port` + **proto file name without path**
+     (`GRPC-Host`/`GRPC-Port` + base name of `GRPC-ProtoFile`), so different users sharing
+     the same file at different local paths reuse the same cache entry.
+   - Re-uploading the identical content returns `cached: true` without running `protoc`;
+     changed content is recompiled and replaces the entry.
    - If the proto has `import` statements, upload the imported files first (dependencies
      first, the main proto with `service`/`rpc` last). A file without any service is kept
      as an import dependency (`methods: 0` — that's normal).
@@ -136,8 +164,13 @@ If the target gRPC server has no reflection and the proto file lives on the clie
      into the WKT dir at compile time.
 3. Call `list_methods` again — methods are immediately available. **No config changes needed.**
 
-When the session ends (idle > `GRPC_SESSION_PROTO_IDLE_TIMEOUT`, default 1 h, or app shutdown)
-the in-memory data is discarded. Max file size: `GRPC_MAX_UPLOAD_SIZE` (default 1 MB).
+In the **next MCP session** (new session id) the methods are served from the cache
+automatically — no `load_proto_file` call needed. The cache is Caffeine-backed:
+entries live until idle > `GRPC_PROTO_CACHE_IDLE_TIMEOUT` (default 30 d) or LRU
+eviction at `GRPC_PROTO_CACHE_MAX_ENTRIES` (default 64), and are cleared on app
+restart. Stats are exposed via Micrometer (`cache.size`, `cache.gets`, `cache.puts`,
+`cache.evictions` with `cache=protoCache` tag, when actuator metrics are enabled).
+Max file size: `GRPC_MAX_UPLOAD_SIZE` (default 1 MB).
 
 ## Discovery Modes
 
@@ -146,7 +179,7 @@ Resolved **per connection** (lazy, on first use of the connection):
 - **FILE** — `GRPC-ProtoFile` header / env is set → compiled via `protoc`, extracts schemas and source code comments
 - **REFLECTION** — no proto file → uses gRPC `ServerReflectionService` (the server must support it)
 
-## Environment Variables
+## Configuration
 
 ### MCP
 
@@ -171,7 +204,9 @@ Resolved **per connection** (lazy, on first use of the connection):
 | `GRPC_PROTO_BASE_DIR` | Base dir for `GRPC-ProtoFile` file names (traversal-protected) | `./protos` |
 | `GRPC_WKT_DIR` | Dir for well-known proto types (`protoc -I`); starts empty — unresolvable `google/**` imports are extracted here on demand from the classpath `proto-google-common-protos` artifact | `./wkt` |
 | `GRPC_CONNECTION_IDLE_TIMEOUT` | Idle channels are closed after this period | `30m` |
-| `GRPC_SESSION_PROTO_IDLE_TIMEOUT` | In-memory session protos are discarded after this idle period | `1h` |
+| `GRPC_SWEEP_INTERVAL` | How often the background sweep runs (idle channel/proto eviction pass) | `5m` |
+| `GRPC_PROTO_CACHE_IDLE_TIMEOUT` | Cached client-side protos are discarded after this idle period | `30d` |
+| `GRPC_PROTO_CACHE_MAX_ENTRIES` | LRU cap for the proto cache; least recently used entries are evicted | `64` |
 | `GRPC_MAX_UPLOAD_SIZE` | Max `.proto` size for `load_proto_file` (chars) | `1048576` |
 
 ### Timeouts & Retry
@@ -211,39 +246,36 @@ Resolved **per connection** (lazy, on first use of the connection):
 │              │  (each client entry in the config =  │   lazy discovery   │ ────────► │ gRPC Service B  │
 │  second entry│   its own connection: target, creds) │   retry / evict    │           └─────────────────┘
 └──────────────┘                                      │   load_proto_file  │
-                                                      └────────────────────┘
+                                                       └────────────────────┘
 ```
 
 - **Transport context extractor** resolves the per-client `GrpcConnection` on every request (headers → env → default)
 - **Channel cache** — one `ManagedChannel` per `target|negotiation|metadata-hash`, idle channels evicted
 - **Discovery cache** — one method set per connection (reflection or protoc), built lazily on first use
-- **Session proto store** — client-supplied protos are compiled by `load_proto_file` and kept in RAM, keyed by MCP session id; discarded on session eviction or shutdown (never persisted)
+- **Proto cache** — client-supplied protos are compiled by `load_proto_file` and kept in RAM in a Caffeine cache, keyed by `host:port` + proto file name (shared across MCP sessions); evicted on idle timeout, LRU cap or shutdown (never persisted)
 
-## Build & Test
+## Development
 
 ```bash
-# Build
+# Build: compile + all tests + JaCoCo verification (80% line-coverage gate)
 ./gradlew build
 
-# Test 
+# Tests only
 ./gradlew test
+
+# Run locally without Docker
+./gradlew bootRun
 ```
+
+Coverage report after `./gradlew build`: `build/reports/jacoco/test/html`.
 
 ## Docker
 
 ```bash
-# Build image
-docker build -t grpc-mcp .
-
-# Run
-docker run -p 8080:8080 \
-  -e GRPC_ADDRESS=your-grpc-host:port \
-  -e MCP_NAME="My Service" \
-  -e MCP_API_KEY=your-api-key \
-  grpc-mcp
+docker build -t grpc-mcp:1.6 .
 ```
 
-`MCP_API_KEY` is optional: without it (or empty) the server works without a key.
+Run the built image as shown in [Quick Start](#quick-start).
 
 ## Security
 
@@ -251,6 +283,10 @@ docker run -p 8080:8080 \
 - When `MCP_API_KEY` is empty/absent, the server works without a key (open access); `/actuator` is always open
 - gRPC connection supports TLS via `GRPC_NEGOTIATION_TYPE=TLS`
 - Custom gRPC metadata headers configured via `GRPC_METADATA` JSON
+
+## License
+
+[MIT](LICENSE) © 2026 KSabuev
 
 ---
 

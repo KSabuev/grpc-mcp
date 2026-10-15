@@ -19,7 +19,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -45,7 +44,7 @@ class HealthCheckToolTest {
         var connection = connection();
         when(provider.channel(connection)).thenReturn(channel);
         when(channel.getState(true)).thenReturn(ConnectivityState.READY);
-        when(provider.methods(anyString(), eq(connection))).thenReturn(List.of(mock(MethodMeta.class)));
+        when(provider.methods(eq(connection))).thenReturn(List.of(mock(MethodMeta.class)));
 
         // Act
         var result = call(connection);
@@ -61,7 +60,7 @@ class HealthCheckToolTest {
         var connection = connection();
         when(provider.channel(connection)).thenReturn(channel);
         when(channel.getState(true)).thenReturn(ConnectivityState.TRANSIENT_FAILURE);
-        when(provider.methods(anyString(), eq(connection))).thenReturn(List.of());
+        when(provider.methods(eq(connection))).thenReturn(List.of());
 
         // Act
         var result = call(connection);

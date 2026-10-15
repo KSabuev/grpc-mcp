@@ -53,7 +53,7 @@ public class DescriptorFileServiceDiscoverer implements ServiceDiscoverer {
             var protoList = fds.getFileList();
 
             if (protoList.isEmpty()) {
-                throw new RuntimeException("Descriptor set is empty (no files compiled)");
+                throw new RuntimeException("Дескрипторный набор пуст (не скомпилировано ни одного файла)");
             }
 
             log.info("Loaded {} file descriptor protos from compiled descriptor set", protoList.size());
@@ -62,7 +62,7 @@ public class DescriptorFileServiceDiscoverer implements ServiceDiscoverer {
             methods.addAll(result.methods());
             log.info("Discovered {} services with {} methods from proto file", services.size(), methods.size());
         } catch (IOException e) {
-            throw new RuntimeException("Failed to parse compiled descriptor file", e);
+            throw new RuntimeException("Не удалось разобрать скомпилированный дескрипторный файл", e);
         }
     }
 
@@ -90,19 +90,19 @@ public class DescriptorFileServiceDiscoverer implements ServiceDiscoverer {
         if (protoFilePath.endsWith(".proto")) {
             return compileProtoFile();
         }
-        throw new IllegalArgumentException("Unsupported file type: " + protoFilePath + ". Expected .proto or .desc");
+        throw new IllegalArgumentException("Неподдерживаемый тип файла: " + protoFilePath + ". Ожидается .proto или .desc");
     }
 
     private byte[] readDescriptorFile() {
         Path descPath = Path.of(protoFilePath);
         if (!Files.exists(descPath)) {
-            throw new IllegalArgumentException("Descriptor file not found: " + protoFilePath);
+            throw new IllegalArgumentException("Файл дескриптора не найден: " + protoFilePath);
         }
         log.info("Reading pre-compiled descriptor file: {}", protoFilePath);
         try {
             return Files.readAllBytes(descPath);
         } catch (IOException e) {
-            throw new RuntimeException("Failed to read descriptor file: " + protoFilePath, e);
+            throw new RuntimeException("Не удалось прочитать файл дескриптора: " + protoFilePath, e);
         }
     }
 
@@ -111,7 +111,7 @@ public class DescriptorFileServiceDiscoverer implements ServiceDiscoverer {
 
         Path protoFile = Path.of(protoFilePath);
         if (!Files.exists(protoFile)) {
-            throw new IllegalArgumentException("Proto file not found: " + protoFilePath);
+            throw new IllegalArgumentException("Proto-файл не найден: " + protoFilePath);
         }
 
         Path protoDir = protoFile.getParent();
@@ -123,7 +123,7 @@ public class DescriptorFileServiceDiscoverer implements ServiceDiscoverer {
         try {
             descFile = Files.createTempFile("grpc-mcp-", ".desc");
         } catch (IOException e) {
-            throw new RuntimeException("Failed to create temp file for descriptor", e);
+            throw new RuntimeException("Не удалось создать временный файл для дескриптора", e);
         }
 
         log.info("Compiling proto file via protoc: {}", protoFilePath);
@@ -132,7 +132,6 @@ public class DescriptorFileServiceDiscoverer implements ServiceDiscoverer {
         try {
             int round = 0;
             while (true) {
-                // rebuilt every round: the WKT dir may appear (on-demand extraction) mid-way
                 List<String> cmd = buildProtocCmd(descFile, protoDir, protoFile);
                 ProtocResult result;
                 try {
@@ -147,7 +146,7 @@ public class DescriptorFileServiceDiscoverer implements ServiceDiscoverer {
                 var missing = parseMissingImports(result.output());
                 int extracted = extractMissingWkts(missing);
                 if (extracted == 0 || ++round >= MAX_WKT_RETRY_ROUNDS) {
-                    throw new RuntimeException("protoc failed with exit code " + result.exitCode() + ":\n" + result.output());
+                    throw new ProtocCompilationException(result.exitCode(), result.output());
                 }
                 log.info("Extracted {} missing WKT proto file(s) into {}, retrying protoc (round {})", extracted, wktDir, round);
             }

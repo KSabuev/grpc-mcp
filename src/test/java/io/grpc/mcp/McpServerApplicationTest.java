@@ -1,8 +1,10 @@
 package io.grpc.mcp;
 
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import io.grpc.mcp.connection.ConnectionProvider;
@@ -34,13 +36,37 @@ class McpServerApplicationTest {
     @Autowired
     ConnectionProvider connectionProvider;
 
+    @Autowired
+    MeterRegistry meterRegistry;
+
+    @Autowired
+    TaskScheduler taskScheduler;
+
+    @Test
+    void protoCache_caffeineMetricsRegistered() {
+        assertThat(hasMeter("cache.size", "cache", "protoCache")).isTrue();
+        assertThat(hasMeter("cache.gets", "cache", "protoCache")).isTrue();
+        assertThat(hasMeter("cache.puts", "cache", "protoCache")).isTrue();
+        assertThat(hasMeter("cache.evictions", "cache", "protoCache")).isTrue();
+    }
+
+    private boolean hasMeter(String name, String tagKey, String tagValue) {
+        return meterRegistry.getMeters().stream()
+                .anyMatch(m -> m.getId().getName().equals(name)
+                        && m.getId().getTags().stream()
+                        .anyMatch(t -> t.getKey().equals(tagKey) && t.getValue().equals(tagValue)));
+    }
+
+    @Test
+    void enableScheduling_providesTaskScheduler() {
+        assertThat(taskScheduler).isNotNull();
+    }
+
     @Test
     void contextLoads_createsEmptyWktDir() throws Exception {
         // Arrange
-        // Spring context bootstrapped by @SpringBootTest, wkt dir configured to a temp path
 
         // Act
-        // context load runs ConnectionProvider.init(), which must create the (empty) WKT dir
 
         // Assert
         assertThat(connectionProvider).isNotNull();

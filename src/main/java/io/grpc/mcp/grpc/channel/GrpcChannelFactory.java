@@ -63,7 +63,7 @@ public class GrpcChannelFactory {
                             .build());
             return withMetadata(withKeepalive(builder), connection.metadata()).build();
         } catch (Exception e) {
-            throw new RuntimeException("Failed to create TLS gRPC channel to " + connection.target(), e);
+            throw new RuntimeException("Не удалось создать TLS gRPC-канал до " + connection.target(), e);
         }
     }
 

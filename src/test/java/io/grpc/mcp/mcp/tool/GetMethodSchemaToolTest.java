@@ -67,7 +67,7 @@ class GetMethodSchemaToolTest {
     @Test
     void returnsSchemaForExistingMethod() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("pkg.Svc/m1"))).thenReturn(meta("m1", false, false));
+        when(provider.method(eq(connection), eq("pkg.Svc/m1"))).thenReturn(meta("m1", false, false));
 
         // Act
         var result = call("pkg.Svc/m1");
@@ -80,7 +80,7 @@ class GetMethodSchemaToolTest {
     @Test
     void schemaIncludesStreamingFlags() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("pkg.Svc/stream"))).thenReturn(meta("stream", true, false));
+        when(provider.method(eq(connection), eq("pkg.Svc/stream"))).thenReturn(meta("stream", true, false));
 
         // Act
         var result = call("pkg.Svc/stream");
@@ -93,7 +93,7 @@ class GetMethodSchemaToolTest {
     @Test
     void methodNotFound_returnsError() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("pkg.Svc/unknown")))
+        when(provider.method(eq(connection), eq("pkg.Svc/unknown")))
                 .thenThrow(new IllegalArgumentException(
                         "Метод \"pkg.Svc/unknown\" не найден."));
 
@@ -108,7 +108,7 @@ class GetMethodSchemaToolTest {
     @Test
     void schemaIncludesClientStreamingFlag() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("pkg.Svc/cs"))).thenReturn(meta("cs", false, true));
+        when(provider.method(eq(connection), eq("pkg.Svc/cs"))).thenReturn(meta("cs", false, true));
 
         // Act
         var result = call("pkg.Svc/cs");
@@ -121,7 +121,7 @@ class GetMethodSchemaToolTest {
     @Test
     void schemaIncludesServiceDescription() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("pkg.Svc/svcDesc"))).thenReturn(
+        when(provider.method(eq(connection), eq("pkg.Svc/svcDesc"))).thenReturn(
                 MethodMeta.builder()
                         .serviceName("pkg.Svc").methodName("svcDesc").fullMethodName("pkg.Svc/svcDesc")
                         .inputDescriptor(inputDesc).outputDescriptor(outputDesc)
@@ -140,7 +140,7 @@ class GetMethodSchemaToolTest {
     @Test
     void schemaIncludesInputMessageDescription() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("pkg.Svc/msgDesc"))).thenReturn(
+        when(provider.method(eq(connection), eq("pkg.Svc/msgDesc"))).thenReturn(
                 MethodMeta.builder()
                         .serviceName("pkg.Svc").methodName("msgDesc").fullMethodName("pkg.Svc/msgDesc")
                         .inputDescriptor(inputDesc).outputDescriptor(outputDesc)
@@ -159,7 +159,7 @@ class GetMethodSchemaToolTest {
     @Test
     void schemaIncludesMethodDescription() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("pkg.Svc/methodDesc"))).thenReturn(
+        when(provider.method(eq(connection), eq("pkg.Svc/methodDesc"))).thenReturn(
                 MethodMeta.builder()
                         .serviceName("pkg.Svc").methodName("methodDesc").fullMethodName("pkg.Svc/methodDesc")
                         .inputDescriptor(inputDesc).outputDescriptor(outputDesc)
@@ -178,7 +178,7 @@ class GetMethodSchemaToolTest {
     @Test
     void schemaForMethodWithNullDescriptions() {
         // Arrange
-        when(provider.method(anyString(), eq(connection), eq("pkg.Svc/nullDesc"))).thenReturn(meta("nullDesc", false, false));
+        when(provider.method(eq(connection), eq("pkg.Svc/nullDesc"))).thenReturn(meta("nullDesc", false, false));
 
         // Act
         var result = call("pkg.Svc/nullDesc");

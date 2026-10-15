@@ -9,17 +9,18 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import io.grpc.mcp.config.GrpcProperties;
+import io.grpc.mcp.config.ProtoCacheConfig;
 import io.grpc.mcp.connection.ConnectionProvider;
 import io.grpc.mcp.connection.GrpcConnection;
 import io.grpc.mcp.grpc.channel.GrpcChannelFactory;
+import io.grpc.mcp.grpc.compilation.ProtoCompilationService;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
+
 
 @ExtendWith(MockitoExtension.class)
 class LoadProtoFileToolTest {
@@ -47,12 +48,17 @@ class LoadProtoFileToolTest {
         props = new GrpcProperties();
         props.setProtoBaseDir(tempDir.resolve("protos").toString());
         props.setProtocTimeout(java.time.Duration.ofSeconds(10));
-        provider = new ConnectionProvider(channelFactory, props);
+        provider = new ConnectionProvider(channelFactory, props, new ProtoCompilationService(props),
+                ProtoCacheConfig.nativeCache(ProtoCacheConfig.cacheManager(props)));
         tool = new LoadProtoFileTool(provider, props, new ObjectMapper());
     }
 
+    private GrpcConnection clientConnection() {
+        return new GrpcConnection("client:50051", "PLAINTEXT", Map.of(), "/home/user/nsi.proto");
+    }
+
     private McpSchema.CallToolResult call(java.util.Map<String, Object> args) {
-        var exchange = ListMethodsToolTest.exchange(ListMethodsToolTest.connection());
+        var exchange = ListMethodsToolTest.exchange(clientConnection());
         return tool.build().callHandler().apply(exchange, new McpSchema.CallToolRequest("load_proto_file", args));
     }
 
@@ -61,7 +67,7 @@ class LoadProtoFileToolTest {
     }
 
     @Test
-    void compilesProtoIntoSessionMemory() throws Exception {
+    void compilesProtoIntoServerCache() throws Exception {
         // Arrange
 
         // Act
@@ -74,31 +80,70 @@ class LoadProtoFileToolTest {
         var json = new ObjectMapper().readTree(text(result));
         assertThat(json.get("name").asText()).isEqualTo("nsi.proto");
         assertThat(json.get("methods").asInt()).isEqualTo(1);
-        // no disk ref anymore: nothing to paste into the config
+        assertThat(json.get("cached").asBoolean()).isFalse();
         assertThat(json.has("ref")).isFalse();
         assertThat(json.has("opencodeConfig")).isFalse();
 
-        assertThat(provider.hasSessionProto("test-session")).isTrue();
-        var methods = provider.methods("test-session",
-                new GrpcConnection("client:50051", "PLAINTEXT", Map.of(), "/home/user/nsi.proto"));
+        assertThat(provider.hasCachedProto(clientConnection())).isTrue();
+        var methods = provider.methods(clientConnection());
         assertThat(methods).hasSize(1);
+    }
+
+    @Test
+    void reload_sameContent_returnsCached() throws Exception {
+        // Arrange
+        call(java.util.Map.of("content", PROTO, "name", "nsi.proto"));
+
+        // Act
+        var result = call(java.util.Map.of("content", PROTO, "name", "nsi.proto"));
+
+        // Assert
+        assertThat(result.isError()).isFalse();
+        var json = new ObjectMapper().readTree(text(result));
+        assertThat(json.get("cached").asBoolean()).isTrue();
+        assertThat(json.get("methods").asInt()).isEqualTo(1);
+    }
+
+    @Test
+    void cacheSharedAcrossSessions_sameConnection() throws Exception {
+        // Arrange
+        call(java.util.Map.of("content", PROTO, "name", "nsi.proto"));
+
+        // Act
+        var methods = provider.methods(clientConnection());
+
+        // Assert
+        assertThat(methods).hasSize(1);
+    }
+
+    @Test
+    void reflectionConnection_returnsError() {
+        // Arrange
+        var exchange = ListMethodsToolTest.exchange(ListMethodsToolTest.connection());
+        var handler = tool.build().callHandler();
+
+        // Act
+        var result = handler.apply(exchange, new McpSchema.CallToolRequest("load_proto_file", java.util.Map.of("content", PROTO)));
+
+        // Assert
+        assertThat(result.isError()).isTrue();
+        assertThat(text(result)).contains("GRPC-ProtoFile");
     }
 
     @Test
     void loadedProto_usableBySessionTools() {
         // Arrange
-        call(java.util.Map.of("content", PROTO, "name", "svc.proto"));
-        var connection = new GrpcConnection("client:50051", "PLAINTEXT", Map.of(), "/home/user/svc.proto");
+        call(java.util.Map.of("content", PROTO, "name", "nsi.proto"));
 
         // Act
-        var meta = provider.method("test-session", connection, "test.TestService/DoIt");
+        var meta = provider.method(clientConnection(), "test.TestService/DoIt");
 
         // Assert
         assertThat(meta.fullMethodName()).isEqualTo("test.TestService/DoIt");
     }
 
     @Test
-    void reload_replacesSessionProto() {
+    void reload_secondFile_addedToSameCacheEntry() {
         // Arrange
         call(java.util.Map.of("content", PROTO, "name", "svc.proto"));
 
@@ -106,7 +151,7 @@ class LoadProtoFileToolTest {
         call(java.util.Map.of("content", PROTO, "name", "svc2.proto"));
 
         // Assert
-        assertThat(provider.hasSessionProto("test-session")).isTrue();
+        assertThat(provider.hasCachedProto(clientConnection())).isTrue();
     }
 
     @Test
@@ -122,11 +167,7 @@ class LoadProtoFileToolTest {
         assertThat(result.isError()).isFalse();
         var json = new ObjectMapper().readTree(text(result));
         assertThat(json.get("methods").asInt()).isZero();
-        // no session proto entry: the file is only an import dependency
-        assertThat(provider.hasSessionProto("test-session")).isFalse();
-        // but the file is kept in the session scratch dir for later imports
-        Path scratch = Path.of(System.getProperty("java.io.tmpdir"), "grpc-mcp", "test-session");
-        assertThat(Files.exists(scratch.resolve("dep.proto"))).isTrue();
+        assertThat(provider.hasCachedProto(clientConnection())).isTrue();
     }
 
     @Test
@@ -150,7 +191,7 @@ class LoadProtoFileToolTest {
         assertThat(result.isError()).isFalse();
         var json = new ObjectMapper().readTree(text(result));
         assertThat(json.get("methods").asInt()).isEqualTo(1);
-        assertThat(provider.hasSessionProto("test-session")).isTrue();
+        assertThat(provider.hasCachedProto(clientConnection())).isTrue();
     }
 
     @Test
@@ -179,7 +220,7 @@ class LoadProtoFileToolTest {
     }
 
     @Test
-    void invalidProto_returnsError() {
+    void invalidProto_returnsStructuredError() throws Exception {
         // Arrange
 
         // Act
@@ -189,7 +230,14 @@ class LoadProtoFileToolTest {
 
         // Assert
         assertThat(result.isError()).isTrue();
+        var json = new ObjectMapper().readTree(text(result));
+        assertThat(json.get("error").asText()).isEqualTo("protoc_compile_error");
+        assertThat(json.get("name").asText()).isEqualTo("broken.proto");
+        assertThat(json.get("file").asText()).isEqualTo("broken.proto");
+        assertThat(json.get("line").asInt()).isGreaterThanOrEqualTo(1);
+        assertThat(json.get("protocOutput").asText()).isNotEmpty();
         assertThat(text(result)).contains("загрузить proto");
+        assertThat(provider.hasCachedProto(clientConnection())).isFalse();
     }
 
     @Test
@@ -228,11 +276,15 @@ class LoadProtoFileToolTest {
         // Act
         call(java.util.Map.of("content", PROTO, "name", "nsi.proto"));
 
-        // Assert
-        // only the session scratch dir (tmp) holds a protoc temp file; nothing in the app dirs
-        Path scratch = Path.of(System.getProperty("java.io.tmpdir"), "grpc-mcp", "test-session");
-        assertThat(Files.list(scratch).count()).isGreaterThanOrEqualTo(1);
+        // Assert: scratch dirs are transient, nothing persistent is written
+        assertThat(leftoverScratchDirs()).isZero();
         assertThat(Files.exists(tempDir.resolve("uploads"))).isFalse();
         assertThat(Files.list(tempDir.resolve("protos")).count()).isZero();
+    }
+
+    private static long leftoverScratchDirs() throws java.io.IOException {
+        return Files.list(Path.of(System.getProperty("java.io.tmpdir")))
+                .filter(p -> p.getFileName().toString().startsWith("grpc-mcp-load-"))
+                .count();
     }
 }

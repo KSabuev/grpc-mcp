@@ -8,8 +8,11 @@ import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import io.grpc.mcp.config.GrpcProperties;
+import io.grpc.mcp.config.ProtoCacheConfig;
 import io.grpc.mcp.grpc.channel.GrpcChannelFactory;
+import io.grpc.mcp.grpc.compilation.ProtoCompilationService;
 import io.grpc.mcp.grpc.discovery.MethodMeta;
+import io.grpc.mcp.grpc.discovery.ProtocCompilationException;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -61,10 +64,16 @@ class ConnectionProviderTest {
         props = new GrpcProperties();
         props.setProtoBaseDir(tempDir.resolve("protos").toString());
         props.setConnectionIdleTimeout(Duration.ofMinutes(30));
-        props.setSessionProtoIdleTimeout(Duration.ofHours(1));
+        props.setProtoCacheIdleTimeout(Duration.ofHours(1));
         props.setProtocTimeout(Duration.ofSeconds(10));
         props.setReflectionTimeout(Duration.ofSeconds(5));
-        provider = new ConnectionProvider(channelFactory, props);
+        provider = new ConnectionProvider(channelFactory, props, new ProtoCompilationService(props),
+                ProtoCacheConfig.nativeCache(ProtoCacheConfig.cacheManager(props)));
+    }
+
+    private ConnectionProvider newProvider() {
+        return new ConnectionProvider(channelFactory, props, new ProtoCompilationService(props),
+                ProtoCacheConfig.nativeCache(ProtoCacheConfig.cacheManager(props)));
     }
 
     private GrpcConnection connection() {
@@ -143,7 +152,7 @@ class ConnectionProviderTest {
 
         // Assert
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("escapes");
+                .hasMessageContaining("выходит за пределы");
     }
 
     @Test
@@ -155,7 +164,7 @@ class ConnectionProviderTest {
 
         // Assert
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Absolute");
+                .hasMessageContaining("Абсолютные");
     }
 
     @Test
@@ -189,7 +198,7 @@ class ConnectionProviderTest {
         var connection = new GrpcConnection("client:50051", "PLAINTEXT", Map.of(), "svc.proto");
 
         // Act
-        var methods = provider.methods("s1", connection);
+        var methods = provider.methods(connection);
 
         // Assert
         assertThat(methods).extracting(MethodMeta::fullMethodName)
@@ -201,10 +210,10 @@ class ConnectionProviderTest {
         // Arrange
         writeBaseProto("svc.proto");
         var connection = new GrpcConnection("client:50051", "PLAINTEXT", Map.of(), "svc.proto");
-        provider.methods("s1", connection);
+        provider.methods(connection);
 
         // Act
-        var cached = provider.methods("s1", connection);
+        var cached = provider.methods(connection);
 
         // Assert
         assertThat(cached).isNotNull();
@@ -217,7 +226,7 @@ class ConnectionProviderTest {
         var connection = new GrpcConnection("client:50051", "PLAINTEXT", Map.of(), "svc.proto");
 
         // Act
-        var meta = provider.method("s1", connection, "test.TestService/DoIt");
+        var meta = provider.method(connection, "test.TestService/DoIt");
 
         // Assert
         assertThat(meta.serviceName()).isEqualTo("test.TestService");
@@ -230,7 +239,7 @@ class ConnectionProviderTest {
         var connection = new GrpcConnection("client:50051", "PLAINTEXT", Map.of(), "svc.proto");
 
         // Act
-        var thrown = catchThrowable(() -> provider.method("s1", connection, "test.TestService/Nope"));
+        var thrown = catchThrowable(() -> provider.method(connection, "test.TestService/Nope"));
 
         // Assert
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
@@ -248,22 +257,22 @@ class ConnectionProviderTest {
         var c2 = new GrpcConnection("h:1", "PLAINTEXT", Map.of(), "b.proto");
 
         // Act
-        var keyA = provider.discoveryKey("s1", c1);
+        var keyA = provider.discoveryKey(c1);
 
         // Assert
-        assertThat(keyA).isNotEqualTo(provider.discoveryKey("s1", c2));
+        assertThat(keyA).isNotEqualTo(provider.discoveryKey(c2));
     }
 
     @Test
-    void discoveryKey_clientPath_dependsOnSession() {
+    void discoveryKey_clientPath_usesProtoCacheKey() {
         // Arrange
         var conn = clientPathConnection("/home/user/svc.proto");
 
         // Act
-        var keyS1 = provider.discoveryKey("s1", conn);
+        var key = provider.discoveryKey(conn);
 
         // Assert
-        assertThat(keyS1).isNotEqualTo(provider.discoveryKey("s2", conn));
+        assertThat(key).isEqualTo("cache:" + conn.protoCacheKey());
     }
 
     @Test
@@ -280,15 +289,13 @@ class ConnectionProviderTest {
         assertThat(provider.isEmpty()).isTrue();
     }
 
-    // === In-memory session protos ===
-
     @Test
     void clientPath_withoutLoadedProto_throwsLlmRequest() {
         // Arrange
         var connection = clientPathConnection("/home/user/svc.proto");
 
         // Act
-        var thrown = catchThrowable(() -> provider.methods("s1", connection));
+        var thrown = catchThrowable(() -> provider.methods(connection));
 
         // Assert
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
@@ -298,12 +305,13 @@ class ConnectionProviderTest {
     }
 
     @Test
-    void loadProtoIntoSession_methodsAvailableForSession() {
+    void loadProto_methodsAvailableForConnection() {
         // Arrange
-        provider.loadProtoIntoSession("s1", PROTO, "svc.proto");
+        var connection = clientPathConnection("/home/user/svc.proto");
+        provider.loadProto(connection, PROTO, "svc.proto");
 
         // Act
-        var methods = provider.methods("s1", clientPathConnection("/home/user/svc.proto"));
+        var methods = provider.methods(connection);
 
         // Assert
         assertThat(methods).extracting(MethodMeta::fullMethodName)
@@ -311,119 +319,209 @@ class ConnectionProviderTest {
     }
 
     @Test
-    void loadProtoIntoSession_methodLookup() {
+    void loadProto_methodLookup() {
         // Arrange
-        provider.loadProtoIntoSession("s1", PROTO, "svc.proto");
+        var connection = clientPathConnection("/home/user/svc.proto");
+        provider.loadProto(connection, PROTO, "svc.proto");
 
         // Act
-        var meta = provider.method("s1", clientPathConnection("/home/user/svc.proto"), "test.TestService/DoIt");
+        var meta = provider.method(connection, "test.TestService/DoIt");
 
         // Assert
         assertThat(meta.serviceName()).isEqualTo("test.TestService");
     }
 
     @Test
-    void loadProtoIntoSession_replacesPrevious() {
+    void loadProto_changedContent_recompiles() {
         // Arrange
-        provider.loadProtoIntoSession("s1", PROTO, "svc.proto");
+        var connection = clientPathConnection("/home/user/svc.proto");
+        provider.loadProto(connection, PROTO, "svc.proto");
 
         // Act
-        provider.loadProtoIntoSession("s1", PROTO_TWO, "svc.proto");
+        var result = provider.loadProto(connection, PROTO_TWO, "svc.proto");
 
         // Assert
-        var methods = provider.methods("s1", clientPathConnection("/home/user/svc.proto"));
+        assertThat(result.cached()).isFalse();
+        var methods = provider.methods(connection);
         assertThat(methods).extracting(MethodMeta::fullMethodName)
                 .contains("test.TestService/DoIt", "test.TestService/Other");
     }
 
     @Test
-    void sessionIsolation_protoNotVisibleToOtherSessions() {
+    void loadProto_sameContent_servedFromCache() {
         // Arrange
-        provider.loadProtoIntoSession("s1", PROTO, "svc.proto");
-        var otherSession = clientPathConnection("/home/user/svc.proto");
+        var connection = clientPathConnection("/home/user/svc.proto");
+        provider.loadProto(connection, PROTO, "svc.proto");
 
         // Act
-        var thrown = catchThrowable(() -> provider.methods("s2", otherSession));
+        var result = provider.loadProto(connection, PROTO, "svc.proto");
+
+        // Assert
+        assertThat(result.cached()).isTrue();
+        assertThat(result.methodCount()).isEqualTo(1);
+        assertThat(provider.protoCacheCount()).isEqualTo(1);
+    }
+
+    @Test
+    void protoCache_sharedAcrossSessions_sameConnection() {
+        // Arrange
+        var connection = clientPathConnection("/home/user/svc.proto");
+        provider.loadProto(connection, PROTO, "svc.proto");
+
+        // Act
+        var methods = provider.methods(connection);
+
+        // Assert
+        assertThat(methods).extracting(MethodMeta::fullMethodName)
+                .contains("test.TestService/DoIt");
+        assertThat(provider.hasCachedProto(connection)).isTrue();
+    }
+
+    @Test
+    void protoCache_isolatedByConnectionKey() {
+        // Arrange
+        provider.loadProto(clientPathConnection("/home/user/svc.proto"), PROTO, "svc.proto");
+        var other = clientPathConnection("/home/user/other.proto");
+
+        // Act
+        var thrown = catchThrowable(() -> provider.methods(other));
 
         // Assert
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("load_proto_file");
-        assertThat(provider.hasSessionProto("s2")).isFalse();
+        assertThat(provider.hasCachedProto(other)).isFalse();
     }
 
     @Test
-    void loadProtoIntoSession_noMethods_keptAsDependency() {
+    void protoCacheKey_hostPortAndBaseName_only() {
         // Arrange
+        var a = clientPathConnection("/home/user/protos/svc.proto");
+        var b = clientPathConnection("/other/path/svc.proto");
+        var c = clientPathConnection("/home/user/protos/svc.proto");
 
         // Act
-        int methods = provider.loadProtoIntoSession("s1", "syntax = \"proto3\";", "empty.proto");
+        var keyA = a.protoCacheKey();
 
         // Assert
-        assertThat(methods).isZero();
-        assertThat(provider.hasSessionProto("s1")).isFalse();
+        assertThat(keyA).isEqualTo(b.protoCacheKey());
+        assertThat(keyA).isEqualTo(c.protoCacheKey());
+        assertThat(keyA).isEqualTo("client:50051-svc.proto");
+    }
+
+    @Test
+    void protoCacheKey_differentHostOrPort_isolated() {
+        // Arrange
+        var base = clientPathConnection("/home/user/svc.proto");
+        var otherHost = new GrpcConnection("other:50051", "PLAINTEXT", Map.of(), "/home/user/svc.proto");
+        var otherPort = new GrpcConnection("client:6000", "PLAINTEXT", Map.of(), "/home/user/svc.proto");
+
+        // Act
+        var key = base.protoCacheKey();
+
+        // Assert
+        assertThat(key).isNotEqualTo(otherHost.protoCacheKey());
+        assertThat(key).isNotEqualTo(otherPort.protoCacheKey());
+    }
+
+    @Test
+    void loadProto_noMethods_keptAsDependency() {
+        // Arrange
+        var connection = clientPathConnection("/home/user/svc.proto");
+
+        // Act
+        var result = provider.loadProto(connection, "syntax = \"proto3\";", "empty.proto");
+
+        // Assert
+        assertThat(result.methodCount()).isZero();
+        assertThat(provider.hasCachedProto(connection)).isTrue();
+        var thrown = catchThrowable(() -> provider.methods(connection));
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("load_proto_file");
+    }
+
+    @Test
+    void lruCap_evictsLeastRecentlyUsed() {
+        // Arrange
+        props.setProtoCacheMaxEntries(1);
+        provider = newProvider();
+        var first = clientPathConnection("/home/user/a.proto");
+        var second = clientPathConnection("/home/user/b.proto");
+        provider.loadProto(first, PROTO, "a.proto");
+        provider.loadProto(second, PROTO_TWO, "b.proto");
+        provider.maintainProtoCache();
+
+        // Act
+        var thrown = catchThrowable(() -> provider.methods(first));
+
+        // Assert
+        assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("load_proto_file");
+        assertThat(provider.hasCachedProto(second)).isTrue();
+        assertThat(provider.protoCacheCount()).isEqualTo(1);
     }
 
     @Test
     void nothingStoredOnServerDisk() throws IOException {
         // Arrange
         Files.createDirectories(Path.of(props.getProtoBaseDir()));
+        var connection = clientPathConnection("/home/user/svc.proto");
 
         // Act
-        provider.loadProtoIntoSession("s1", PROTO, "svc.proto");
+        provider.loadProto(connection, PROTO, "svc.proto");
 
         // Assert
-        // proto base dir stays empty, no uploads dir is created anywhere
         assertThat(Files.list(Path.of(props.getProtoBaseDir()))).isEmpty();
         assertThat(Files.exists(Path.of(props.getProtoBaseDir()).getParent().resolve("uploads"))).isFalse();
-        // only scratch tmp dir for protoc exists (session-scoped)
-        assertThat(Files.isDirectory(provider.sessionTempDir("s1"))).isTrue();
+        assertThat(leftoverScratchDirs()).isZero();
     }
 
     @Test
-    void idleSessionProto_evictedBySweep() throws InterruptedException {
+    void idleProtoCache_evictedAfterIdleTimeout() throws InterruptedException {
         // Arrange
-        props.setSessionProtoIdleTimeout(Duration.ofMillis(1));
-        provider.loadProtoIntoSession("s-idle", PROTO, "svc.proto");
-        Path tempDir = provider.sessionTempDir("s-idle");
-        assertThat(Files.isDirectory(tempDir)).isTrue();
-        Thread.sleep(50);
+        props.setProtoCacheIdleTimeout(Duration.ofMillis(20));
+        provider = newProvider();
+        var connection = clientPathConnection("/home/user/svc.proto");
+        provider.loadProto(connection, PROTO, "svc.proto");
+        Thread.sleep(300);
+
+        // Act
+        provider.maintainProtoCache();
+
+        // Assert
+        assertThat(provider.hasCachedProto(connection)).isFalse();
+    }
+
+    @Test
+    void activeProtoCacheEntry_notEvicted() {
+        // Arrange
+        var connection = clientPathConnection("/home/user/svc.proto");
+        provider.loadProto(connection, PROTO, "svc.proto");
 
         // Act
         provider.sweep();
 
         // Assert
-        assertThat(provider.hasSessionProto("s-idle")).isFalse();
-        assertThat(Files.exists(tempDir)).isFalse();
+        assertThat(provider.hasCachedProto(connection)).isTrue();
     }
 
     @Test
-    void activeSessionProto_notEvicted() {
+    void shutdown_clearsProtoCache() {
         // Arrange
-        provider.loadProtoIntoSession("s-active", PROTO, "svc.proto");
-
-        // Act
-        provider.sweep();
-
-        // Assert
-        assertThat(provider.hasSessionProto("s-active")).isTrue();
-        assertThat(Files.isDirectory(provider.sessionTempDir("s-active"))).isTrue();
-    }
-
-    @Test
-    void shutdown_clearsSessionProtos() {
-        // Arrange
-        provider.loadProtoIntoSession("s1", PROTO, "svc.proto");
-        Path tempDir = provider.sessionTempDir("s1");
+        var connection = clientPathConnection("/home/user/svc.proto");
+        provider.loadProto(connection, PROTO, "svc.proto");
 
         // Act
         provider.shutdown();
 
         // Assert
-        assertThat(provider.hasSessionProto("s1")).isFalse();
-        assertThat(Files.exists(tempDir)).isFalse();
+        assertThat(provider.hasCachedProto(connection)).isFalse();
     }
 
-    // === init / wkt / sweep ===
+    private static long leftoverScratchDirs() throws IOException {
+        return Files.list(Path.of(System.getProperty("java.io.tmpdir")))
+                .filter(p -> p.getFileName().toString().startsWith("grpc-mcp-load-"))
+                .count();
+    }
 
     @Test
     void init_createsEmptyWktDir() throws IOException {
@@ -439,9 +537,10 @@ class ConnectionProviderTest {
     }
 
     @Test
-    void loadProtoIntoSession_missingWktImport_extractedAndCompiled() throws Exception {
+    void loadProto_missingWktImport_extractedAndCompiled() throws Exception {
         // Arrange
         props.setWktDir(tempDir.resolve("wkt-lazy").toString());
+        var connection = clientPathConnection("/home/user/main.proto");
         var proto = """
                 syntax = "proto3";
                 package main;
@@ -455,23 +554,23 @@ class ConnectionProviderTest {
                 """;
 
         // Act
-        var methodCount = provider.loadProtoIntoSession("s-wkt", proto, "main.proto");
+        var result = provider.loadProto(connection, proto, "main.proto");
 
         // Assert
-        assertThat(methodCount).isEqualTo(1);
-        assertThat(provider.methods("s-wkt", clientPathConnection("/home/user/main.proto")))
+        assertThat(result.methodCount()).isEqualTo(1);
+        assertThat(provider.methods(connection))
                 .extracting(MethodMeta::fullMethodName)
                 .contains("main.Svc/DoIt");
         assertThat(Files.exists(tempDir.resolve("wkt-lazy/google/api/annotations.proto"))).isTrue();
     }
 
     @Test
-    void shutdown_afterInit_stopsSweeperAndClearsAll() {
+    void shutdown_afterInit_clearsAll() {
         // Arrange
         provider.init();
         when(channelFactory.createChannel(any())).thenReturn(channel);
         provider.channel(connection());
-        provider.loadProtoIntoSession("s1", PROTO, "svc.proto");
+        provider.loadProto(clientPathConnection("/home/user/svc.proto"), PROTO, "svc.proto");
 
         // Act
         provider.shutdown();
@@ -479,7 +578,7 @@ class ConnectionProviderTest {
         // Assert
         verify(channel).shutdownNow();
         assertThat(provider.isEmpty()).isTrue();
-        assertThat(provider.hasSessionProto("s1")).isFalse();
+        assertThat(provider.hasCachedProto(clientPathConnection("/home/user/svc.proto"))).isFalse();
     }
 
     @Test
@@ -513,16 +612,18 @@ class ConnectionProviderTest {
     }
 
     @Test
-    void sweep_nullSessionProtoIdleTimeout_keepsProtos() {
+    void sweep_nullProtoCacheIdleTimeout_keepsProtos() {
         // Arrange
-        props.setSessionProtoIdleTimeout(null);
-        provider.loadProtoIntoSession("s1", PROTO, "svc.proto");
+        props.setProtoCacheIdleTimeout(null);
+        provider = newProvider();
+        var connection = clientPathConnection("/home/user/svc.proto");
+        provider.loadProto(connection, PROTO, "svc.proto");
 
         // Act
         provider.sweep();
 
         // Assert
-        assertThat(provider.hasSessionProto("s1")).isTrue();
+        assertThat(provider.hasCachedProto(connection)).isTrue();
     }
 
     @Test
@@ -539,8 +640,6 @@ class ConnectionProviderTest {
         assertThat(states).containsValue("READY");
     }
 
-    // === discovery error paths ===
-
     @Test
     void resolveProtoPath_blank_throws() {
         // Arrange
@@ -550,7 +649,7 @@ class ConnectionProviderTest {
 
         // Assert
         assertThat(thrown).isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("empty");
+                .hasMessageContaining("не задана");
     }
 
     @Test
@@ -561,7 +660,7 @@ class ConnectionProviderTest {
         var connection = new GrpcConnection("client:50051", "PLAINTEXT", Map.of(), "empty.proto");
 
         // Act
-        var thrown = catchThrowable(() -> provider.methods("s1", connection));
+        var thrown = catchThrowable(() -> provider.methods(connection));
 
         // Assert
         assertThat(thrown).isInstanceOf(IllegalStateException.class)
@@ -577,34 +676,69 @@ class ConnectionProviderTest {
                 io.grpc.inprocess.InProcessChannelBuilder.forName("no-such-server-" + System.nanoTime()).build());
 
         // Act
-        var thrown = catchThrowable(() -> provider.methods("s1", connection));
+        var thrown = catchThrowable(() -> provider.methods(connection));
 
         // Assert
         assertThat(thrown).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("reflection");
     }
 
-    // === sanitization (indirect) ===
-
     @Test
     void sanitizeFileName_stripsPathAndAddsExtension() {
         // Arrange
+        var connection = clientPathConnection("/home/user/svc.proto");
 
         // Act
-        provider.loadProtoIntoSession("s1", PROTO, "../evil");
+        provider.loadProto(connection, PROTO, "../evil");
+        var main = """
+                syntax = "proto3";
+                package main;
+                import "evil.proto";
+                service Svc { rpc DoIt (test.Input) returns (test.Output); }
+                """;
 
-        // Assert
-        assertThat(Files.exists(provider.sessionTempDir("s1").resolve("evil.proto"))).isTrue();
+        // Assert: the file is stored under the sanitized name "evil.proto" and is importable
+        provider.loadProto(connection, main, "main.proto");
+        assertThat(provider.methods(connection)).extracting(MethodMeta::fullMethodName)
+                .contains("main.Svc/DoIt");
+        assertThat(provider.method(connection, "main.Svc/DoIt").serviceName()).isEqualTo("main.Svc");
     }
 
     @Test
-    void sanitizeSessionId_blankFallsBackToDefault() {
+    void loadProto_invalidProto_throwsAndLeavesCacheClean() throws IOException {
         // Arrange
+        var connection = clientPathConnection("/home/user/svc.proto");
 
         // Act
-        provider.loadProtoIntoSession("", PROTO, "svc.proto");
+        var thrown = catchThrowable(() ->
+                provider.loadProto(connection, "syntax = \"proto3\";\nmessage Broken {", "svc.proto"));
 
         // Assert
-        assertThat(provider.sessionTempDir("")).endsWith(Path.of(System.getProperty("java.io.tmpdir"), "grpc-mcp", "default"));
+        assertThat(thrown).isInstanceOf(ProtocCompilationException.class)
+                .hasMessageContaining("protoc failed with exit code");
+        assertThat(provider.hasCachedProto(connection)).isFalse();
+        assertThat(leftoverScratchDirs()).isZero();
+
+        // a retry with the fixed file succeeds
+        var result = provider.loadProto(connection, PROTO, "svc.proto");
+        assertThat(result.cached()).isFalse();
+        assertThat(provider.methods(connection)).extracting(MethodMeta::fullMethodName)
+                .contains("test.TestService/DoIt");
+    }
+
+    @Test
+    void loadProto_invalidProto_onTopOfGoodVersion_keepsGoodVersion() {
+        // Arrange
+        var connection = clientPathConnection("/home/user/svc.proto");
+        provider.loadProto(connection, PROTO, "svc.proto");
+
+        // Act
+        var thrown = catchThrowable(() ->
+                provider.loadProto(connection, "syntax = \"proto3\";\nmessage Broken {", "svc.proto"));
+
+        // Assert: the last good version is untouched
+        assertThat(thrown).isInstanceOf(ProtocCompilationException.class);
+        assertThat(provider.methods(connection)).extracting(MethodMeta::fullMethodName)
+                .contains("test.TestService/DoIt");
     }
 }

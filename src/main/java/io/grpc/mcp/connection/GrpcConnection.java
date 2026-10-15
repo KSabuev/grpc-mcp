@@ -8,6 +8,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.util.UriUtils;
 
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -20,7 +21,8 @@ import java.util.Map;
  * @param metadata    static gRPC headers (env default overridden by GRPC-Metadata header)
  * @param protoRef    proto source for discovery: null = reflection, a file name relative to
  *                    the proto base dir (file on the server) or an absolute/&tilde; path
- *                    (file on the client machine, loaded into session memory via load_proto_file)
+ *                    (file on the client machine, loaded into the server-side proto cache
+ *                    via load_proto_file)
  */
 @Slf4j
 public record GrpcConnection(String target, String negotiation, Map<String, String> metadata, String protoRef) {
@@ -33,11 +35,21 @@ public record GrpcConnection(String target, String negotiation, Map<String, Stri
     public static final String HEADER_PROTO_FILE = "GRPC-ProtoFile";
     public static final String CONTEXT_KEY = "grpc-connection";
 
-    /** Legacy refs from the disk-upload era; no longer resolvable, replaced by in-memory session protos. */
+    public static final String NOT_CONFIGURED_MESSAGE = "Подключение не настроено.";
+
+    public static final String NO_TARGET_MESSAGE = """
+            GRPC_ADDRESS не задан (адрес gRPC по умолчанию не настроен).
+            Задай GRPC-Host (+ GRPC-Port) в headers конфига MCP-клиента (opencode.json)
+            либо GRPC_ADDRESS в окружении контейнера.
+            """;
+
+    /** Legacy refs from the disk-upload era; no longer resolvable, replaced by the server-side proto cache. */
     public static final String LEGACY_UPLOAD_PREFIX = "upload/";
     public static final int DEFAULT_PORT = 50051;
 
     /**
+     * Resolves the per-client gRPC connection from request headers (falling back to env values).
+     *
      * @return resolved connection; target may be blank when not provided anywhere
      */
     public static GrpcConnection resolve(HttpServletRequest request, GrpcProperties env, ObjectMapper objectMapper) {
@@ -92,7 +104,6 @@ public record GrpcConnection(String target, String negotiation, Map<String, Stri
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
             if (c > 0xFF) {
-                // genuine Unicode (not a latin-1-decoded header byte sequence) — leave as-is
                 return value;
             }
             if (c > 0x7F) {
@@ -167,7 +178,7 @@ public record GrpcConnection(String target, String negotiation, Map<String, Stri
             }
             return hex.toString();
         } catch (java.security.NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 not available", e);
+            throw new IllegalStateException("Алгоритм SHA-256 недоступен", e);
         }
     }
 
@@ -181,29 +192,45 @@ public record GrpcConnection(String target, String negotiation, Map<String, Stri
 
     /**
      * Client machine path (absolute or ~-relative): the file lives on the MCP client's
-     * filesystem, not on the server. Such a proto is loaded into session memory
-     * via the load_proto_file tool.
+     * filesystem, not on the server. Such a proto is loaded into the server-side
+     * proto cache via the load_proto_file tool.
      */
     public boolean isClientPath() {
         return protoRef != null && (protoRef.startsWith("/") || protoRef.startsWith("~"));
     }
 
     /**
+     * Identity of the client-side proto in the server-side proto cache:
+     * target (host:port) + "-" + proto file name without path. Different users
+     * may keep the same proto file at different local paths — the cache is shared
+     * by file name, not by full path.
+     */
+    public String protoCacheKey() {
+        if (!isClientPath()) {
+            throw new IllegalArgumentException("protoCacheKey is only defined for client paths");
+        }
+        String baseName = Path.of(protoRef).getFileName().toString();
+        return target + "-" + baseName;
+    }
+
+    /**
      * Actionable instruction for the LLM: read the client-side file and upload it
-     * through load_proto_file (in-memory, session-scoped).
+     * through load_proto_file (server-side RAM cache, shared across MCP sessions).
      */
     public static String clientPathRequest(String protoRef) {
         return """
-                Proto-файл %s — путь на машине клиента (сервер grpc-mcp не читает файлы с машины клиента).
+                Proto-файл %s — путь на машине клиента (сервер grpc-mcp не читает файлы с машины клиента),
+                и в кэше сервера его ещё нет (кэш — по host:port + имя файла, RAM, переживает сессии).
 
                 1. Проверь, что файл существует, и прочитай его: %s.
                    Если файла нет по этому пути — сообщи пользователю:
                    «Файл отсутствует по пути, указанному в конфиге: %s».
-                2. Вызови load_proto_file — сохраняет .proto-файл в памяти сервера grpc-mcp
-                   на время этой MCP-сессии (на диск не записывается) и компилирует его,
-                   генерируя список gRPC-методов. Аргумент content — полный текст .proto
-                   (лимит 1 МБ). Если в файле есть импорты, сначала загрузи импортируемые файлы.
-                3. Повтори вызов list_methods — менять конфиг не нужно, файл уже в памяти сессии.
+                2. Вызови load_proto_file — сохраняет .proto-файл в кэш сервера grpc-mcp
+                   (только RAM, на диск не записывается) и компилирует его, генерируя
+                   список gRPC-методов. Аргумент content — полный текст .proto (лимит 1 МБ).
+                   Если в файле есть импорты, сначала загрузи импортируемые файлы.
+                   В следующих MCP-сессиях загрузка не потребуется — кэш подхватится автоматически.
+                3. Повтори вызов list_methods — менять конфиг не нужно.
                 """.formatted(protoRef, protoRef, protoRef);
     }
 

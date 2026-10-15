@@ -27,7 +27,7 @@ public class HealthCheckTool implements McpTool {
         McpSchema.Tool tool = McpSchema.Tool.builder("health",
                         Map.of("type", "object", "properties", Map.of()))
                 .description("""
-                        Проверить доступность gRPC сервера текущего подключения
+                        Проверяет доступность gRPC сервера текущего подключения
                         (headers GRPC-Host/GRPC-Port в конфиге MCP-клиента).
                         Возвращает: channelState (READY/IDLE/CONNECTING/TRANSIENT_FAILURE/SHUTDOWN),
                         services (количество gRPC сервисов), methods (количество методов).
@@ -41,7 +41,7 @@ public class HealthCheckTool implements McpTool {
                     try {
                         GrpcConnection connection = requireConnection(exchange);
                         ConnectivityState state = provider.channel(connection).getState(true);
-                        int methods = provider.methods(McpTool.sessionId(exchange), connection).size();
+                        int methods = provider.methods(connection).size();
                         Map<String, Object> result = new LinkedHashMap<>();
                         result.put("target", connection.target());
                         result.put("channelState", state.name());
@@ -59,14 +59,10 @@ public class HealthCheckTool implements McpTool {
     private GrpcConnection requireConnection(McpSyncServerExchange exchange) {
         GrpcConnection connection = McpTool.connection(exchange);
         if (connection == null) {
-            throw new IllegalArgumentException("Подключение не настроено");
+            throw new IllegalArgumentException(GrpcConnection.NOT_CONFIGURED_MESSAGE);
         }
         if (!connection.hasTarget()) {
-            throw new IllegalArgumentException("""
-                    GRPC_ADDRESS не задан (адрес gRPC по умолчанию не настроен).
-                    Задайте GRPC-Host (+ GRPC-Port) в headers конфига MCP-клиента (opencode.json)
-                    либо GRPC_ADDRESS в окружении контейнера.
-                    """);
+            throw new IllegalArgumentException(GrpcConnection.NO_TARGET_MESSAGE);
         }
         return connection;
     }

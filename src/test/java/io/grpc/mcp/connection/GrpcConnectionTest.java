@@ -171,7 +171,7 @@ class GrpcConnectionTest {
                 .contains("/home/user/svc.proto")
                 .contains("load_proto_file")
                 .contains("отсутствует по пути, указанному в конфиге: /home/user/svc.proto")
-                .contains("памяти");
+                .contains("кэше");
     }
 
     @Test
@@ -250,7 +250,6 @@ class GrpcConnectionTest {
     @Test
     void fixMojibake_restoresUtf8CyrillicFromLatin1DoubleEncoding() {
         // Arrange
-        // wire: UTF-8 bytes of "Загрузки" decoded by the servlet as ISO-8859-1
         String mojibake = new String("/home/qwerty/Загрузки/svc.proto".getBytes(java.nio.charset.StandardCharsets.UTF_8),
                 java.nio.charset.StandardCharsets.ISO_8859_1);
 
@@ -333,9 +332,7 @@ class GrpcConnectionTest {
         assertThat(GrpcConnection.fixMojibake("/home/user/svc.proto")).isEqualTo("/home/user/svc.proto");
         assertThat(GrpcConnection.fixMojibake(null)).isNull();
         assertThat(GrpcConnection.fixMojibake("  ")).isEqualTo("  ");
-        // a genuine latin-1 value (0xE9 is not a valid UTF-8 sequence) stays as-is
         assertThat(GrpcConnection.fixMojibake("caf\u00E9.proto")).isEqualTo("caf\u00E9.proto");
-        // genuine Unicode (chars > 0xFF) is not a latin-1-decoded header — left untouched
         assertThat(GrpcConnection.fixMojibake("/home/qwerty/Загрузки/svc.proto"))
                 .isEqualTo("/home/qwerty/Загрузки/svc.proto");
     }

@@ -68,36 +68,36 @@ public class InvokeMethodTool implements McpTool {
     private static final String TOOL_DESCRIPTION = """
             Вызывает gRPC метод с переданными аргументами на текущем подключении
             (адрес — из headers GRPC-Host/GRPC-Port в конфиге MCP-клиента).
-             Протокол вызова:
-              1. list_methods — получить точное имя метода
-              2. get_method_schema(method) — получить example с аргументами
-              3. invoke_method(method, arguments, metadata) — передать arguments и опциональные заголовки
+            Протокол вызова:
+            1. list_methods — получить точное имя метода
+            2. get_method_schema(method) — получить example с аргументами
+            3. invoke_method(method, arguments, metadata) — передать arguments и опциональные заголовки
             ВАЖНО:
             Используй example из get_method_schema — это правильный источник
             для имён и типов полей для вызываемого метода.
             Параметры:
-              - method: полное имя метода из list_methods
-              - arguments: JSON-объект (unary, server-streaming) или массив объектов (client-streaming).
-                Используйте example из get_method_schema как шаблон (формат и названия полей),
-                но значения замените на реальные данные.
-                Для client-streaming передайте массив объектов.
-              - Опционально:
-                metadata: JSON-объект {key: value} — gRPC заголовки, передаваемые в вызове.
-                Ключ — название заголовка, значение — строка. 
-                Пример: {"Authorization": "Bearer <JWT>", "X-Id": "123"}.
+            - method: полное имя метода из list_methods
+            - arguments: JSON-объект (unary, server-streaming) или массив объектов (client-streaming).
+              Используй example из get_method_schema как шаблон (формат и названия полей),
+              но значения замени на реальные данные.
+              Для client-streaming передай массив объектов.
+            - Опционально:
+              metadata: JSON-объект {key: value} — gRPC заголовки, передаваемые в вызове.
+              Ключ — название заголовка, значение — строка.
+              Пример: {"Authorization": "Bearer <JWT>", "X-Id": "123"}.
             Поддерживаются unary, server-streaming, client-streaming.
             Bidi-streaming не поддерживается.
-             Server-streaming возвращает JSON-массив ответов (макс 100 сообщений, можно увеличить через maxServerMessages).
-             Client-streaming возвращает один JSON-объект.
-             Unary возвращает один JSON-объект.
-             При ошибке возвращает isError=true с описанием.
-             Если GRPC-ProtoFile — абсолютный путь (файл на машине клиента): сначала прочитай
-             этот файл и отправь его содержимое через load_proto_file, затем повтори вызов.
-             """;
+            Server-streaming возвращает JSON-массив ответов (макс 100 сообщений, можно увеличить через maxServerMessages).
+            Client-streaming возвращает один JSON-объект.
+            Unary возвращает один JSON-объект.
+            При ошибке возвращает isError=true с описанием.
+            Если GRPC-ProtoFile — абсолютный путь (файл на машине клиента): сначала прочитай
+            этот файл и отправь его содержимое через load_proto_file, затем повтори вызов.
+            """;
 
     private static final String TIMESTAMP_HINT = """
             . Проверь формат полей через get_method_schema.
-            Для Timestamp используйте формат: {"date": "2024-01-01T00:00:00Z", "timeZone": "UTC"}.""";
+            Для Timestamp используй формат: {"date": "2024-01-01T00:00:00Z", "timeZone": "UTC"}.""";
 
     static final int DEFAULT_MAX_SERVER_MESSAGES = 100;
 
@@ -129,10 +129,9 @@ public class InvokeMethodTool implements McpTool {
 
     private McpSchema.CallToolResult invoke(McpSyncServerExchange exchange, McpSchema.CallToolRequest request) {
         try {
-            String sessionId = McpTool.sessionId(exchange);
             GrpcConnection connection = requireInvocationConnection(exchange);
             String methodName = (String) request.arguments().get("method");
-            var meta = provider.method(sessionId, connection, methodName);
+            var meta = provider.method(connection, methodName);
 
             if (meta.clientStreaming() && meta.serverStreaming()) {
                 return ToolResults.error("Метод '" + methodName + "' является bidi-streaming и не поддерживается invoke_method.");
@@ -142,10 +141,10 @@ public class InvokeMethodTool implements McpTool {
                     request.arguments().get("arguments"), meta.inputDescriptor());
 
             if (requests.isEmpty()) {
-                return ToolResults.error("arguments не должен быть пустым");
+                return ToolResults.error("arguments не должен быть пустым.");
             }
 
-            MethodDescriptor<DynamicMessage, DynamicMessage> md = getOrCreateDescriptor(sessionId, connection, meta);
+            MethodDescriptor<DynamicMessage, DynamicMessage> md = getOrCreateDescriptor(connection, meta);
             Map<String, String> callMetadata = extractMetadata(request);
             RetryTemplate retryTemplate = retryFactory.forChannel(connection.channelKey());
 
@@ -178,14 +177,10 @@ public class InvokeMethodTool implements McpTool {
     private GrpcConnection requireInvocationConnection(McpSyncServerExchange exchange) {
         GrpcConnection connection = McpTool.connection(exchange);
         if (connection == null) {
-            throw new IllegalArgumentException("Подключение не настроено");
+            throw new IllegalArgumentException(GrpcConnection.NOT_CONFIGURED_MESSAGE);
         }
         if (!connection.hasTarget()) {
-            throw new IllegalArgumentException("""
-                    GRPC_ADDRESS не задан (адрес gRPC по умолчанию не настроен).
-                    Задайте GRPC-Host (+ GRPC-Port) в headers конфига MCP-клиента (opencode.json)
-                    либо GRPC_ADDRESS в окружении контейнера.
-                    """);
+            throw new IllegalArgumentException(GrpcConnection.NO_TARGET_MESSAGE);
         }
         return connection;
     }
@@ -204,7 +199,7 @@ public class InvokeMethodTool implements McpTool {
                 JSON_PARSER.merge(json, builder);
                 result.add(builder.build());
             } catch (IOException e) {
-                throw new IllegalArgumentException("Failed to serialize message: " + e.getMessage(), e);
+                throw new IllegalArgumentException("Не удалось сериализовать сообщение: " + e.getMessage(), e);
             }
         }
         return result;
@@ -230,7 +225,7 @@ public class InvokeMethodTool implements McpTool {
                 }
                 return List.of(normalizeMap(parsed));
             } catch (IOException e) {
-                throw new IllegalArgumentException("Failed to parse arguments JSON: " + e.getMessage(), e);
+                throw new IllegalArgumentException("Не удалось разобрать JSON аргументов: " + e.getMessage(), e);
             }
         }
         return List.of(normalizeMap(raw));
@@ -297,8 +292,8 @@ public class InvokeMethodTool implements McpTool {
     }
 
     private MethodDescriptor<DynamicMessage, DynamicMessage> getOrCreateDescriptor(
-            String sessionId, GrpcConnection connection, io.grpc.mcp.grpc.discovery.MethodMeta meta) {
-        String key = provider.discoveryKey(sessionId, connection) + "/" + meta.fullMethodName();
+            GrpcConnection connection, io.grpc.mcp.grpc.discovery.MethodMeta meta) {
+        String key = provider.discoveryKey(connection) + "/" + meta.fullMethodName();
         return descriptorCache.computeIfAbsent(key, k ->
                 MethodDescriptor.<DynamicMessage, DynamicMessage>newBuilder()
                         .setType(methodType(meta))
@@ -345,7 +340,7 @@ public class InvokeMethodTool implements McpTool {
                 throw se.getStatus().asRuntimeException();
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException("Client-streaming call interrupted", ie);
+                throw new RuntimeException("Вызов client-streaming прерван", ie);
             }
         });
         return ToolResults.success(serializeMessage(response));

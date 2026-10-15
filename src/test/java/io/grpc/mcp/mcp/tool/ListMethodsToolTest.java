@@ -18,7 +18,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
@@ -42,7 +41,7 @@ class ListMethodsToolTest {
     void returnsMethodNames() {
         // Arrange
         var connection = connection();
-        when(provider.methods(anyString(), eq(connection))).thenReturn(List.of(
+        when(provider.methods(eq(connection))).thenReturn(List.of(
                 MethodMeta.builder().fullMethodName("pkg.Svc/m1").build(),
                 MethodMeta.builder().fullMethodName("pkg.Svc/m2").build()));
 
@@ -58,7 +57,7 @@ class ListMethodsToolTest {
     void emptyDiscovery_returnsEmptyList() {
         // Arrange
         var connection = connection();
-        when(provider.methods(anyString(), eq(connection))).thenReturn(List.of());
+        when(provider.methods(eq(connection))).thenReturn(List.of());
 
         // Act
         var result = call(connection);
@@ -85,7 +84,7 @@ class ListMethodsToolTest {
     void providerException_returnsError() {
         // Arrange
         var connection = connection();
-        when(provider.methods(anyString(), eq(connection))).thenThrow(new RuntimeException("backend down"));
+        when(provider.methods(eq(connection))).thenThrow(new RuntimeException("backend down"));
 
         // Act
         var result = call(connection);
@@ -107,7 +106,6 @@ class ListMethodsToolTest {
         var context = McpTransportContext.create(Map.of(GrpcConnection.CONTEXT_KEY, connection));
         var exchange = mock(McpSyncServerExchange.class);
         lenient().when(exchange.transportContext()).thenReturn(context);
-        lenient().when(exchange.sessionId()).thenReturn("test-session");
         return exchange;
     }
 

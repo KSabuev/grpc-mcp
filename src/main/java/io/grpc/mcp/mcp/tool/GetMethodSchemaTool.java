@@ -37,7 +37,7 @@ public class GetMethodSchemaTool implements McpTool {
         McpSchema.Tool tool = McpSchema.Tool.builder("get_method_schema", INPUT_SCHEMA)
                 .description("""
                         Принимает method — полное имя метода из list_methods.
-                        Возвращает JSON c полями: description, inputSchema, outputSchema, example.
+                        Возвращает JSON с полями: description, inputSchema, outputSchema, example.
                         inputSchema — JSON Schema входных аргументов (типы, required, описания полей).
                         outputSchema — JSON Schema ответа сервера.
                         example — шаблон аргументов для invoke_method (формат полей, подставьте свои значения).
@@ -51,7 +51,7 @@ public class GetMethodSchemaTool implements McpTool {
                 .callHandler((exchange, request) -> {
                     try {
                         String methodName = (String) request.arguments().get("method");
-                        var meta = provider.method(McpTool.sessionId(exchange),
+                        var meta = provider.method(
                                 ListMethodsTool.requireReflectionOrTarget(exchange), methodName);
 
                         Map<String, Object> inputSchema = schemaConverter.toJsonSchema(
@@ -105,7 +105,7 @@ public class GetMethodSchemaTool implements McpTool {
                         log.error("Error getting schema: {}", e.getMessage(), e);
                         return McpSchema.CallToolResult.builder()
                                 .addTextContent("Ошибка получения схемы для метода: " + e.getMessage()
-                                        + ". Проверьте имя метода через list_methods.")
+                                        + ". Проверь имя метода через list_methods.")
                                 .isError(true)
                                 .build();
                     }

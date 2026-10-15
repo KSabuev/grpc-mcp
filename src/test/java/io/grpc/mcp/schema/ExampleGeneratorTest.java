@@ -201,8 +201,6 @@ class ExampleGeneratorTest {
         assertThat(example.get("meta")).isEqualTo(java.util.Collections.emptyMap());
     }
 
-    // === 2) Данные есть, граничные случаи ===
-
     @Test
     void generateExample_nestedMessage() {
         // Arrange
@@ -311,8 +309,6 @@ class ExampleGeneratorTest {
         var nextMap = (Map<String, Object>) example.get("next");
         assertThat(nextMap.get("next")).isEqualTo("Message: test.Node");
     }
-
-    // null descriptor → NPE (no null guard in production code), intentionally not handled
 
     private static Descriptors.Descriptor buildMessage(DescriptorProtos.DescriptorProto msgProto) {
         var fdp = DescriptorProtos.FileDescriptorProto.newBuilder()

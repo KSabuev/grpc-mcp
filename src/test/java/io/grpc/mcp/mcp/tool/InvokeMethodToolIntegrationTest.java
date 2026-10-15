@@ -167,7 +167,6 @@ class InvokeMethodToolIntegrationTest {
         tool = new InvokeMethodTool(provider, retryFactory, properties, McpJsonDefaults.getMapper());
         connection = ListMethodsToolTest.connection();
         lenient().when(provider.channel(connection)).thenReturn(channel);
-        // execute the callback for real (no retries)
         when(retryTemplate.execute(any(RetryCallback.class))).thenAnswer(inv -> {
             @SuppressWarnings("unchecked")
             RetryCallback<Object, RuntimeException> cb =
@@ -183,7 +182,7 @@ class InvokeMethodToolIntegrationTest {
     }
 
     private void stub(String full) {
-        when(provider.method(anyString(), eq(connection), eq(full))).thenReturn(metas.get(full));
+        when(provider.method(eq(connection), eq(full))).thenReturn(metas.get(full));
     }
 
     private static String str(DynamicMessage m, String f) {
@@ -278,7 +277,6 @@ class InvokeMethodToolIntegrationTest {
         // Arrange
         var exchange = mock(io.modelcontextprotocol.server.McpSyncServerExchange.class);
         lenient().when(exchange.transportContext()).thenReturn(McpTransportContext.EMPTY);
-        lenient().when(exchange.sessionId()).thenReturn("test-session");
 
         var req = new McpSchema.CallToolRequest("invoke_method",
                 Map.of("method", "test.TestService/DoIt", "arguments", Map.of("name", "x")));

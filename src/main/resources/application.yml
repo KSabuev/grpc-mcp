@@ -37,5 +37,7 @@ grpc:
   proto-base-dir: ${GRPC_PROTO_BASE_DIR:./protos}
   wkt-dir: ${GRPC_WKT_DIR:./wkt}
   connection-idle-timeout: ${GRPC_CONNECTION_IDLE_TIMEOUT:30m}
-  session-proto-idle-timeout: ${GRPC_SESSION_PROTO_IDLE_TIMEOUT:1h}
+  sweep-interval: ${GRPC_SWEEP_INTERVAL:5m}
+  proto-cache-idle-timeout: ${GRPC_PROTO_CACHE_IDLE_TIMEOUT:30d}
+  proto-cache-max-entries: ${GRPC_PROTO_CACHE_MAX_ENTRIES:64}
   max-upload-size: ${GRPC_MAX_UPLOAD_SIZE:1048576}
