@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.grpc.mcp.config.GrpcProperties;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.web.util.UriUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
@@ -60,13 +61,28 @@ public record GrpcConnection(String target, String negotiation, Map<String, Stri
     }
 
     /**
-     * Reads a request header and fixes UTF-8/ISO-8859-1 double encoding: servlet
-     * containers decode header bytes as ISO-8859-1, while most clients (curl, Go,
-     * Python) put raw UTF-8 bytes on the wire (e.g. Cyrillic file paths). Values
-     * that do not round-trip (genuine latin-1) are returned unchanged.
+     * Reads a request header and restores non-ASCII values:
+     * 1. percent-decoding — clients that cannot put raw UTF-8 into HTTP headers
+     *    (Node.js / opencode) send values URL-encoded, e.g.
+     *    "GRPC-ProtoFile: /home/qwerty/%D0%97%D0%B0%D0%B3%D1%80%D1%83%D0%B7%D0%BA%D0%B8/svc.proto";
+     * 2. UTF-8/ISO-8859-1 mojibake fix — servlet containers decode header bytes as
+     *    ISO-8859-1, while clients like curl/Go/Python put raw UTF-8 bytes on the wire.
+     * Values that do not round-trip (genuine latin-1) are returned unchanged.
      */
     static String header(HttpServletRequest request, String name) {
-        return fixMojibake(request.getHeader(name));
+        return fixMojibake(percentDecode(request.getHeader(name)));
+    }
+
+    static String percentDecode(String value) {
+        if (value == null || value.indexOf('%') < 0) {
+            return value;
+        }
+        try {
+            String decoded = UriUtils.decode(value, StandardCharsets.UTF_8);
+            return decoded.indexOf('\uFFFD') >= 0 ? value : decoded;
+        } catch (IllegalArgumentException e) {
+            return value;
+        }
     }
 
     static String fixMojibake(String value) {
@@ -95,8 +111,8 @@ public record GrpcConnection(String target, String negotiation, Map<String, Stri
                 if (parsed > 0) {
                     return parsed;
                 }
-            } catch (NumberFormatException ignored) {
-                // fall through to default
+            } catch (NumberFormatException e) {
+                log.warn("Invalid GRPC-Port value '{}', falling back to default port {}", headerPort, DEFAULT_PORT);
             }
         }
         return DEFAULT_PORT;
@@ -120,7 +136,7 @@ public record GrpcConnection(String target, String negotiation, Map<String, Stri
             parsed.values().removeIf(v -> v == null);
             return parsed;
         } catch (Exception e) {
-            log.warn("Failed to parse {} as JSON object of string headers: {}", source, e.getMessage());
+            log.warn("Failed to parse {} as JSON object of string headers: {}", source, e.getMessage(), e);
             return Map.of();
         }
     }

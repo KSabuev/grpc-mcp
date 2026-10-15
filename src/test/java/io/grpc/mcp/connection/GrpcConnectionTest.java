@@ -251,13 +251,76 @@ class GrpcConnectionTest {
     void fixMojibake_restoresUtf8CyrillicFromLatin1DoubleEncoding() {
         // Arrange
         // wire: UTF-8 bytes of "Загрузки" decoded by the servlet as ISO-8859-1
-        String mojibake = new String("/home/q1/Загрузки/svc.proto".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+        String mojibake = new String("/home/qwerty/Загрузки/svc.proto".getBytes(java.nio.charset.StandardCharsets.UTF_8),
                 java.nio.charset.StandardCharsets.ISO_8859_1);
 
         // Act
 
         // Assert
-        assertThat(GrpcConnection.fixMojibake(mojibake)).isEqualTo("/home/q1/Загрузки/svc.proto");
+        assertThat(GrpcConnection.fixMojibake(mojibake)).isEqualTo("/home/qwerty/Загрузки/svc.proto");
+    }
+
+    @Test
+    void percentDecode_restoresCyrillicFromUtf8PercentEncoding() {
+        // Arrange
+        String encoded = "/home/qwerty/%D0%97%D0%B0%D0%B3%D1%80%D1%83%D0%B7%D0%BA%D0%B8/master.proto";
+
+        // Act
+        String decoded = GrpcConnection.percentDecode(encoded);
+
+        // Assert
+        assertThat(decoded).isEqualTo("/home/qwerty/Загрузки/master.proto");
+    }
+
+    @Test
+    void percentDecode_invalidSequence_leavesValueUnchanged() {
+        // Arrange
+        String value = "100%file.proto";
+
+        // Act
+        String decoded = GrpcConnection.percentDecode(value);
+
+        // Assert
+        assertThat(decoded).isEqualTo(value);
+    }
+
+    @Test
+    void percentDecode_invalidUtf8Bytes_revertToOriginal() {
+        // Arrange
+        String value = "/tmp/x%FF.proto";
+
+        // Act
+        String decoded = GrpcConnection.percentDecode(value);
+
+        // Assert
+        assertThat(decoded).isEqualTo(value);
+    }
+
+    @Test
+    void resolve_percentEncodedCyrillicProtoFile_decodedToClientPath() {
+        // Arrange
+        when(request.getHeader(GrpcConnection.HEADER_PROTO_FILE))
+                .thenReturn("/home/qwerty/%D0%97%D0%B0%D0%B3%D1%80%D1%83%D0%B7%D0%BA%D0%B8/master.proto");
+
+        // Act
+        var connection = GrpcConnection.resolve(request, new GrpcProperties(), objectMapper);
+
+        // Assert
+        assertThat(connection.protoRef()).isEqualTo("/home/qwerty/Загрузки/master.proto");
+    }
+
+    @Test
+    void resolve_rawUtf8MojibakeProtoFile_stillFixedByPipeline() {
+        // Arrange
+        String mojibake = new String("/home/qwerty/Загрузки/svc.proto".getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                java.nio.charset.StandardCharsets.ISO_8859_1);
+        when(request.getHeader(GrpcConnection.HEADER_PROTO_FILE)).thenReturn(mojibake);
+
+        // Act
+        var connection = GrpcConnection.resolve(request, new GrpcProperties(), objectMapper);
+
+        // Assert
+        assertThat(connection.protoRef()).isEqualTo("/home/qwerty/Загрузки/svc.proto");
     }
 
     @Test
@@ -273,7 +336,7 @@ class GrpcConnectionTest {
         // a genuine latin-1 value (0xE9 is not a valid UTF-8 sequence) stays as-is
         assertThat(GrpcConnection.fixMojibake("caf\u00E9.proto")).isEqualTo("caf\u00E9.proto");
         // genuine Unicode (chars > 0xFF) is not a latin-1-decoded header — left untouched
-        assertThat(GrpcConnection.fixMojibake("/home/q1/Загрузки/svc.proto"))
-                .isEqualTo("/home/q1/Загрузки/svc.proto");
+        assertThat(GrpcConnection.fixMojibake("/home/qwerty/Загрузки/svc.proto"))
+                .isEqualTo("/home/qwerty/Загрузки/svc.proto");
     }
 }
