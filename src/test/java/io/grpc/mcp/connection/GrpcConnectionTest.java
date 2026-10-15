@@ -89,6 +89,17 @@ class GrpcConnectionTest {
     }
 
     @Test
+    void hasTarget_unresolvedPlaceholder_isFalse() {
+        // Arrange
+        var connection = new GrpcConnection("${GRPC_ADDRESS}", "PLAINTEXT", Map.of(), null);
+
+        // Act
+
+        // Assert
+        assertThat(connection.hasTarget()).isFalse();
+    }
+
+    @Test
     void channelKey_includesTargetAndNegotiation() {
         // Arrange
         var connection = new GrpcConnection("host:50051", "plaintext", Map.of(), null);

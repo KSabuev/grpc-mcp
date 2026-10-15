@@ -156,7 +156,7 @@ public record GrpcConnection(String target, String negotiation, Map<String, Stri
     }
 
     public boolean hasTarget() {
-        return target != null && !target.isBlank();
+        return target != null && !target.isBlank() && !target.contains("${");
     }
 
     public boolean usesReflection() {

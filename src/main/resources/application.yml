@@ -19,7 +19,7 @@ mcp:
   name: ${MCP_NAME:grpc-mcp}
 
 grpc:
-  address: ${GRPC_ADDRESS}
+  address: ${GRPC_ADDRESS:}
   negotiation-type: ${GRPC_NEGOTIATION_TYPE:PLAINTEXT}
   proto-file: ${GRPC_PROTO_FILE:}
   metadata-json: ${GRPC_METADATA:{}}

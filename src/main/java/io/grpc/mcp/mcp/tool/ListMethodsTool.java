@@ -68,9 +68,9 @@ public class ListMethodsTool implements McpTool {
         }
         if (!connection.hasTarget() && connection.usesReflection()) {
             throw new IllegalArgumentException("""
-                    Адрес gRPC не указан: задайте GRPC-Host (+ GRPC-Port) или GRPC-Address
-                    в headers конфига MCP-клиента (opencode.json) либо GRPC_ADDRESS
-                    в окружении контейнера.
+                    GRPC_ADDRESS не задан (адрес gRPC по умолчанию не настроен).
+                    Задайте GRPC-Host (+ GRPC-Port) в headers конфига MCP-клиента (opencode.json)
+                    либо GRPC_ADDRESS в окружении контейнера.
                     """);
         }
         return connection;
