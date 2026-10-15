@@ -15,8 +15,8 @@ logging:
     io.modelcontextprotocol: DEBUG
 
 mcp:
-  api-key: ${MCP_API_KEY}
-  name: ${MCP_NAME}
+  api-key: ${MCP_API_KEY:}
+  name: ${MCP_NAME:grpc-mcp}
 
 grpc:
   address: ${GRPC_ADDRESS}

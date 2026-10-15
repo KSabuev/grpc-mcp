@@ -35,6 +35,8 @@ docker run -p 8080:8080 \
   grpc-mcp:1.0
 ```
 
+`MCP_API_KEY` is optional: without it (or empty) the server works without a key.
+
 Then connect any MCP client:
 
 ```json
@@ -150,8 +152,8 @@ Resolved **per connection** (lazy, on first use of the connection):
 
 | Variable | Description | Default |
 |---|---|---|
-| `MCP_NAME` | MCP server display name | — |
-| `MCP_API_KEY` | Auth key for `X-Api-Key` header | — |
+| `MCP_NAME` | MCP server display name | `grpc-mcp` |
+| `MCP_API_KEY` | Auth key for `X-Api-Key` header; when empty/absent the server works without a key | (empty) |
 
 ### gRPC Connection (defaults, overridable per client via headers)
 
@@ -241,10 +243,12 @@ docker run -p 8080:8080 \
   grpc-mcp
 ```
 
+`MCP_API_KEY` is optional: without it (or empty) the server works without a key.
+
 ## Security
 
-- All requests require `X-Api-Key` header (configured via `MCP_API_KEY`)
-- Requests without a valid key are rejected with `401 Unauthorized`
+- When `MCP_API_KEY` is set, MCP requests require a matching `X-Api-Key` header; otherwise `401 Unauthorized`
+- When `MCP_API_KEY` is empty/absent, the server works without a key (open access); `/actuator` is always open
 - gRPC connection supports TLS via `GRPC_NEGOTIATION_TYPE=TLS`
 - Custom gRPC metadata headers configured via `GRPC_METADATA` JSON
 

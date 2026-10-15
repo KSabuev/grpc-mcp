@@ -130,4 +130,20 @@ class ApiKeyFilterTest {
         verify(chain).doFilter(req, res);
         verify(res, never()).setStatus(401);
     }
+
+    @Test
+    void allowsMcpPathWhenApiKeyNull() throws Exception {
+        // Arrange
+        var nullProps = new McpProperties();
+        nullProps.setApiKey(null);
+        filter = new ApiKeyFilter(nullProps);
+        when(req.getRequestURI()).thenReturn("/mcp");
+
+        // Act
+        filter.doFilter(req, res, chain);
+
+        // Assert
+        verify(chain).doFilter(req, res);
+        verify(res, never()).setStatus(401);
+    }
 }

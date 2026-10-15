@@ -19,7 +19,8 @@ public class ApiKeyFilter extends OncePerRequestFilter {
     private final String apiKey;
 
     public ApiKeyFilter(McpProperties mcpProperties) {
-        this.apiKey = mcpProperties.getApiKey();
+        String key = mcpProperties.getApiKey();
+        this.apiKey = key == null ? "" : key;
     }
 
     @Override

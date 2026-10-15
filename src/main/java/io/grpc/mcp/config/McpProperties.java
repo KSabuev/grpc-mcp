@@ -10,8 +10,7 @@ import org.springframework.validation.annotation.Validated;
 @ConfigurationProperties(prefix = "mcp")
 public class McpProperties {
 
-    @NotBlank
-    private String apiKey;
+    private String apiKey = "";
 
     @NotBlank
     private String name = "grpc-mcp";
